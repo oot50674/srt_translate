@@ -1,0 +1,86 @@
+<html>
+
+<head>
+    <meta charset="utf-8" />
+    <link crossorigin="" href="https://fonts.gstatic.com/" rel="preconnect" />
+    <link as="style"
+        href="https://fonts.googleapis.com/css2?display=swap&amp;family=Noto+Sans%3Awght%40400%3B500%3B700%3B900&amp;family=Work+Sans%3Awght%40400%3B500%3B700%3B900"
+        onload="this.rel='stylesheet'" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Outlined" rel="stylesheet" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+    <title>Translation Progress...</title>
+    <link href="data:image/x-icon;base64," rel="icon" type="image/x-icon" />
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+</head>
+
+<body class="bg-slate-50" style='font-family: "Work Sans", "Noto Sans", sans-serif;'>
+    <div class="relative flex size-full min-h-screen flex-col group/design-root overflow-x-hidden">
+        <div class="layout-container flex h-full grow flex-col">
+            <header class="flex items-center justify-between whitespace-nowrap border-b border-solid border-b-slate-200 px-10 py-4 bg-white shadow-sm">
+                <div class="flex items-center gap-3 text-slate-900">
+                    <div class="size-7 text-[#0c77f2]">
+                        <svg fill="none" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M4 42.4379C4 42.4379 14.0962 36.0744 24 41.1692C35.0664 46.8624 44 42.2078 44 42.2078L44 7.01134C44 7.01134 35.068 11.6577 24.0031 5.96913C14.0971 0.876274 4 7.27094 4 7.27094L4 42.4379Z" fill="currentColor"></path>
+                        </svg>
+                    </div>
+                    <a href="/" class="text-slate-900 text-xl font-semibold leading-tight tracking-[-0.015em] hover:text-[#0c77f2] transition-colors cursor-pointer">자막 번역기</a>
+                </div>
+                <div class="flex flex-1 justify-end gap-6">
+                    <nav class="flex items-center gap-6">
+                        <!-- 네비게이션 링크 -->
+                    </nav>
+                    <div class="flex gap-3">
+                        <!-- 버튼들 -->
+                    </div>
+                </div>
+            </header>
+            
+            <main class="px-2 sm:px-4 md:px-6 lg:px-8 xl:px-10 flex flex-1 justify-center py-4 sm:py-6 md:py-8">
+                <div class="layout-content-container flex flex-col w-full max-w-5xl">
+                    <div class="mb-8 p-4 bg-white rounded-lg shadow">
+                        <div class="flex gap-4 justify-between items-center mb-2">
+                            <p class="text-slate-700 text-base font-medium leading-normal">Translation Progress</p>
+                            <p id="progress-text" class="text-[#0c77f2] text-sm font-semibold leading-normal">0%</p>
+                        </div>
+                        <div class="rounded-full bg-slate-200 h-3 overflow-hidden">
+                            <div id="progress-bar" class="h-full rounded-full bg-[#0c77f2] transition-all duration-500 ease-out" style="width:0%;"></div>
+                        </div>
+                    </div>
+                    
+                    <ul id="file-list" class="mb-8 p-4 bg-white rounded-lg shadow space-y-1"></ul>
+                    
+                    <div id="translation-container" class="bg-white rounded-lg shadow overflow-hidden flex flex-col min-h-[400px]">
+                        <div class="px-6 py-4 border-b border-slate-200 flex-shrink-0 flex justify-between items-center">
+                            <h3 class="text-slate-800 text-xl sm:text-2xl font-semibold leading-tight">Subtitle Translation</h3>
+                            <button id="stop-translation-btn" class="hidden">
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                                    <path d="M5.25 3A2.25 2.25 0 0 0 3 5.25v9.5A2.25 2.25 0 0 0 5.25 17h9.5A2.25 2.25 0 0 0 17 14.75v-9.5A2.25 2.25 0 0 0 14.75 3h-9.5Z"></path>
+                                </svg>
+                                <span>작업 중지</span>
+                            </button>
+                        </div>
+                        <div class="flex-grow overflow-hidden">
+                            <div class="h-full overflow-y-auto p-2 sm:p-4">
+                                <div class="overflow-x-auto h-full">
+                                    <table class="w-full min-w-[600px]">
+                                        <thead class="bg-slate-100 sticky top-0 z-10">
+                                            <tr>
+                                                <th class="px-4 sm:px-6 py-3 text-left text-slate-600 w-1/2 text-sm font-medium uppercase tracking-wider">Original Subtitle</th>
+                                                <th class="px-4 sm:px-6 py-3 text-left text-slate-600 w-1/2 text-sm font-medium uppercase tracking-wider">Translated Subtitle</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="translation-body" class="divide-y divide-slate-200"></tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+    
+    <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/progress.js') }}"></script>
+</body>

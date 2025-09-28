@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="utf-8" />
+    <link crossorigin="" href="https://fonts.gstatic.com/" rel="preconnect" />
+    <link as="style"
+        href="https://fonts.googleapis.com/css2?display=swap&amp;family=Noto+Sans%3Awght%40400%3B500%3B700%3B900&amp;family=Work+Sans%3Awght%40400%3B500%3B700%3B900"
+        onload="this.rel='stylesheet'" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet" />
+    <title>자막 번역기</title>
+    <link href="data:image/x-icon;base64," rel="icon" type="image/x-icon" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+</head>
+
+<body>
+    <div class="relative flex size-full min-h-screen flex-col bg-slate-100 group/design-root overflow-x-hidden"
+        style='font-family: "Work Sans", "Noto Sans", sans-serif;'>
+        <div class="layout-container flex h-full grow flex-col">
+            <header
+                class="flex items-center justify-between whitespace-nowrap border-b border-solid border-b-slate-200 px-10 py-4 bg-white shadow-sm">
+                <div class="flex items-center gap-3 text-slate-900">
+                    <div class="size-7 text-[#0c77f2]">
+                        <svg fill="none" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+                            <path
+                                d="M4 42.4379C4 42.4379 14.0962 36.0744 24 41.1692C35.0664 46.8624 44 42.2078 44 42.2078L44 7.01134C44 7.01134 35.068 11.6577 24.0031 5.96913C14.0971 0.876274 4 7.27094 4 7.27094L4 42.4379Z"
+                                fill="currentColor"></path>
+                        </svg>
+                    </div>
+                    <h2 class="text-slate-900 text-xl font-semibold leading-tight tracking-[-0.015em]">자막 번역기</h2>
+                </div>
+                <div class="flex flex-1 justify-end gap-6">
+                    <nav class="flex items-center gap-6">
+                        <!-- <a class="text-slate-700 hover:text-[#0c77f2] text-sm font-medium leading-normal transition-colors"
+                            href="#">홈</a>
+                        <a class="text-slate-700 hover:text-[#0c77f2] text-sm font-medium leading-normal transition-colors"
+                            href="#">가격</a>
+                        <a class="text-slate-700 hover:text-[#0c77f2] text-sm font-medium leading-normal transition-colors"
+                            href="#">문의</a> -->
+                    </nav>
+                    <div class="flex gap-3">
+                        <!-- <button
+                            class="flex min-w-[84px] max-w-[480px] cursor-pointer items-center justify-center overflow-hidden rounded-md h-10 px-4 bg-[#0c77f2] text-slate-50 text-sm font-semibold leading-normal tracking-[0.015em] hover:bg-blue-600 transition-colors">
+                            <span class="truncate">회원가입</span>
+                        </button>
+                        <button
+                            class="flex min-w-[84px] max-w-[480px] cursor-pointer items-center justify-center overflow-hidden rounded-md h-10 px-4 bg-slate-200 text-slate-700 text-sm font-semibold leading-normal tracking-[0.015em] hover:bg-slate-300 transition-colors">
+                            <span class="truncate">로그인</span>
+                        </button> -->
+                    </div>
+                </div>
+            </header>
+            <main class="px-40 flex justify-center py-10">
+                <div class="layout-content-container flex flex-col w-full max-w-3xl py-8 bg-white shadow-xl rounded-xl">
+                    <div class="px-8 md:px-12">
+                        <h2
+                            class="text-slate-900 tracking-tight text-3xl font-bold leading-tight text-center pb-2 pt-6">
+                            자막 번역하기</h2>
+                        <p class="text-slate-600 text-base font-normal leading-relaxed pb-8 pt-2 text-center">
+                            SRT 자막 파일을 쉽게 번역하세요. 아래에 파일을 업로드하거나 내용을 직접 붙여넣으세요.
+                        </p>
+                        <!-- 데이터 전송은 JavaScript에서 처리합니다 -->
+                        <form id="srt-upload-form">
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
+                                <div class="flex flex-col">
+                                    <h3 class="text-slate-800 text-xl font-semibold leading-tight tracking-[-0.015em] mb-3">
+                                        자막 파일 업로드</h3>
+                                    <div id="drop-zone"
+                                        class="flex flex-col items-center justify-center gap-4 rounded-lg border-2 border-dashed border-slate-300 px-6 py-10 text-center bg-slate-50 hover:border-slate-400 transition-colors">
+                                        <span class="material-icons text-4xl text-slate-500">upload_file</span>
+                                        <p id="file-upload-text"
+                                            class="text-slate-700 text-base font-medium leading-tight">여기에 .srt 파일을 끌어다 놓으세요
+                                        </p>
+                                        <p class="text-slate-500 text-sm font-normal leading-normal">또는</p>
+                                        <input type="file" name="srt_files" id="srt-file" accept=".srt" multiple class="hidden" />
+                                        <button type="button" id="select-btn"
+                                            class="flex items-center gap-2 min-w-[84px] max-w-[480px] cursor-pointer justify-center overflow-hidden rounded-md h-10 px-4 bg-slate-200 text-slate-700 text-sm font-semibold leading-normal tracking-[0.015em] hover:bg-slate-300 transition-colors">
+                                            <span class="material-icons text-lg">folder_open</span>
+                                            <span class="truncate">파일 찾기</span>
+                                        </button>
+                                        <p class="text-slate-500 text-xs mt-2">최대 파일 크기: 5MB</p>
+                                    </div>
+                                </div>
+                                <div class="flex flex-col">
+                                    <h3 class="text-slate-800 text-xl font-semibold leading-tight tracking-[-0.015em] mb-3">
+                                        자막 텍스트 붙여넣기</h3>
+                                    <textarea id="srt-text" name="srt_text"
+                                    class="form-input flex w-full min-w-0 flex-1 resize-y overflow-hidden rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#0c77f2] border border-slate-300 bg-slate-50 focus:border-[#0c77f2] min-h-48 placeholder:text-slate-400 p-4 text-sm font-normal leading-normal"
+                                    placeholder="자막 텍스트를 여기에 붙여넣으세요 (예: SRT 파일에서)"></textarea>
+                                </div>
+                            </div>
+                            <div class="mt-6 flex flex-col gap-4">
+                                <h3 class="text-slate-800 text-lg font-semibold">번역 설정</h3>
+                                <div>
+                                    <label for="api-key" class="block text-sm font-medium text-slate-700 mb-1">Google API Key</label>
+                                    <input type="password" id="api-key" class="form-input w-full rounded-md border-slate-300" placeholder="예: AIza..." autocomplete="off" />
+                                </div>
+                                <div>
+                                    <label for="model-name" class="block text-sm font-medium text-slate-700 mb-1">모델 이름</label>
+                                    <input type="text" id="model-name" class="form-input w-full rounded-md border-slate-300" placeholder="예: gemini-2.5-flash" />
+                                </div>
+                                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                    <div>
+                                        <label for="target-lang" class="block text-sm font-medium text-slate-700 mb-1">타겟 언어</label>
+                                        <input type="text" id="target-lang" class="form-input w-full rounded-md border-slate-300" placeholder="예: 한국어" />
+                                    </div>
+                                    <div>
+                                        <label for="chunk-size" class="block text-sm font-medium text-slate-700 mb-1">청크 크기</label>
+                                        <input type="number" id="chunk-size" class="form-input w-full rounded-md border-slate-300" min="1" value="10" />
+                                    </div>                                    <div>
+                                        <div class="flex justify-between items-center">
+                                            <label for="thinking-budget" class="block text-sm font-medium text-slate-700 mb-1">Thinking Budget</label>
+                                            <div class="flex items-center gap-1">
+                                                <input type="checkbox" id="disable-thinking" class="form-checkbox h-4 w-4 text-blue-600 border-gray-300 rounded">
+                                                <label for="disable-thinking" class="text-xs text-slate-600">비활성화</label>
+                                            </div>
+                                        </div>
+                                        <input type="number" id="thinking-budget" class="form-input w-full rounded-md border-slate-300" min="512" step="1" value="8192" placeholder="예: 8192" />
+                                    </div>
+                                </div>
+                                <div>
+                                    <label for="custom-prompt" class="block text-sm font-medium text-slate-700 mb-1">커스텀 프롬프트</label>
+                                    <textarea id="custom-prompt" class="form-input w-full rounded-md border-slate-300 resize-y p-2 text-sm" rows="4" placeholder="추가 프롬프트를 입력하세요"></textarea>
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    <select id="preset-select" class="form-select rounded-md border-slate-300 text-sm"></select>
+                                    <button type="button" id="save-preset-btn" class="px-3 py-2 bg-slate-200 rounded-md text-sm font-semibold hover:bg-slate-300">프리셋 저장</button>
+                                </div>
+                            </div>
+                            </div>
+                            <div class="flex justify-center pt-6">
+                                <button type="submit"
+                                    class="flex items-center gap-2 min-w-[200px] max-w-[480px] cursor-pointer justify-center overflow-hidden rounded-lg h-12 px-6 bg-[#0c77f2] text-slate-50 text-base font-semibold leading-normal tracking-[0.015em] hover:bg-blue-600 transition-colors shadow-md hover:shadow-lg">
+                                    <span class="material-icons">translate</span>
+                                    <span class="truncate">번역 시작하기</span>
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+</body>
+
+</html>
