@@ -1,6 +1,10 @@
 # 번역 서비스 웹 애플리케이션
 
-Flask를 이용한 간단한 번역 서비스 웹 애플리케이션입니다.
+<img width="1369" height="1247" alt="image" src="https://github.com/user-attachments/assets/61dd2d7b-8ec5-427c-bb21-e4cab991000b" />
+
+<img width="1369" height="1247" alt="image" src="https://github.com/user-attachments/assets/baebd883-fc0d-4e15-97b8-df84d79d2e68" />
+
+Flask를 이용한 번역 서비스 웹 애플리케이션입니다.
 
 ## 기능
 
@@ -28,18 +32,6 @@ python app.py
 ```
 
 4. 웹 브라우저에서 애플리케이션 접속:
-```
-http://127.0.0.1:5000
-```
-
-## 실행 명령어
-
-1. 애플리케이션 실행:
-```bash
-python app.py
-```
-
-2. 실행 후 브라우저에서 접속:
 ```
 http://127.0.0.1:5000
 ```
