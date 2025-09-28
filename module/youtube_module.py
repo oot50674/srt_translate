@@ -122,7 +122,7 @@ def get_transcript(video_id: str, target_lang: str = TARGET_LANGUAGE, languages:
         transcript_list = ytt_api.list(video_id)
         logger.info(f"비디오 ID {video_id}의 자막 목록을 가져왔습니다.")
 
-        # 1단계: 목표 언어의 자막 직접 검색 (수동 우선)
+        # 목표 언어의 자막 직접 검색 (수동 우선)
         try:
             transcript = transcript_list.find_transcript([target_lang])
             fetched_transcript = transcript.fetch()
@@ -137,7 +137,7 @@ def get_transcript(video_id: str, target_lang: str = TARGET_LANGUAGE, languages:
         except NoTranscriptFound:
             logger.debug(f"목표 언어 {target_lang} 자막이 없습니다.")
 
-        # 2단계: 다양한 언어의 자막 검색 및 번역 시도
+        # 다양한 언어의 자막 검색 및 번역 시도
         for lang_code in languages:
             if lang_code == target_lang:
                 continue  # 이미 시도했음
@@ -180,7 +180,7 @@ def get_transcript(video_id: str, target_lang: str = TARGET_LANGUAGE, languages:
                 logger.debug(f"{lang_code} 자막이 없습니다.")
                 continue
 
-        # 3단계: 사용 가능한 첫 번째 자막 사용 (번역 없이)
+        # 사용 가능한 첫 번째 자막 사용 (번역 없이)
         available_transcripts = list(transcript_list)
         if available_transcripts:
             first_transcript = available_transcripts[0]
@@ -195,7 +195,7 @@ def get_transcript(video_id: str, target_lang: str = TARGET_LANGUAGE, languages:
                 'source_transcript': f"{first_transcript.language} ({'자동' if first_transcript.is_generated else '수동'})"
             }
 
-        # 4단계: 사용 가능한 자막이 없음
+        # 사용 가능한 자막이 없음
         raise NoTranscriptFound(video_id, [], [])
 
     except YouTubeRequestFailed as e:
