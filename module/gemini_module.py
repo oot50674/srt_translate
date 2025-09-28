@@ -45,11 +45,18 @@ class GeminiClient:
             ValueError: API 키를 찾을 수 없는 경우.
         """
         # API 키 설정 - 전달된 값을 우선 사용하고, 없으면 환경변수로 대체
-        api_key = (api_key or "").strip() or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+        if api_key:
+            api_key = api_key.strip()
         
         if not api_key:
-            logger.error("API 키 환경 변수가 없습니다. GOOGLE_API_KEY 또는 GEMINI_API_KEY를 설정하세요.")
-            raise ValueError("Gemini API 키가 필요합니다.")
+            api_key = os.getenv("GOOGLE_API_KEY")
+            if not api_key:
+                logger.error("API 키가 제공되지 않았습니다. 웹 인터페이스에서 API 키를 입력하거나 GOOGLE_API_KEY 환경변수를 설정하세요.")
+                raise ValueError("Gemini API 키가 필요합니다. 웹 인터페이스에서 API 키를 입력하거나 GOOGLE_API_KEY를 설정하세요.")
+            else:
+                logger.info("환경변수(GOOGLE_API_KEY)에서 API 키를 로드했습니다.")
+        else:
+            logger.info("사용자가 제공한 API 키를 사용합니다.")
 
         self.api_key = api_key
         

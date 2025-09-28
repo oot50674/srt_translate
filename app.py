@@ -5,6 +5,7 @@ import json
 import time
 import uuid
 from flask import Flask, render_template, request, jsonify, Response
+from dotenv import load_dotenv, set_key
 from module import srt_module
 from module.gemini_module import GeminiClient
 
@@ -13,10 +14,30 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
+# .env 로드 설정
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ENV_PATH = os.path.join(BASE_DIR, '.env')
+load_dotenv(dotenv_path=ENV_PATH, override=False)
+
 DEFAULT_MODEL = "gemini-2.5-flash"
 
 # 업로드된 파일과 옵션을 임시로 보관하는 작업 저장소 (DB로 대체됨)
 # pending_jobs: dict[str, dict] = {}
+
+
+def save_api_key_to_env(api_key: str) -> None:
+    """사용자가 입력한 API 키를 .env(GOOGLE_API_KEY)와 환경변수에 저장합니다."""
+    api_key = (api_key or '').strip()
+    if not api_key:
+        return
+    try:
+        # .env에 저장 (GOOGLE_API_KEY만 사용)
+        set_key(ENV_PATH, 'GOOGLE_API_KEY', api_key)
+        # 현재 프로세스 환경에도 반영
+        os.environ['GOOGLE_API_KEY'] = api_key
+        logger.info(".env(GOOGLE_API_KEY)에 API 키가 저장되었습니다.")
+    except Exception as e:
+        logger.error(".env 저장 중 오류: %s", e)
 
 def translate_srt_stream(content: str, client, target_lang: str = '한국어', batch_size: int = 10, user_prompt: str = '', thinking_budget: int = 8192, stop_flag = None):
     """SRT 텍스트를 번역하며 진행 상황을 스트림으로 제공합니다."""
@@ -239,6 +260,9 @@ def api_create_job():
     except (ValueError, TypeError):
         thinking_budget = 8192
     api_key = (request.form.get('api_key') or '').strip()
+    if api_key:
+        # 사용자가 제출한 키를 즉시 .env에 저장하고 환경에 반영
+        save_api_key_to_env(api_key)
     model_name = (request.form.get('model') or '').strip() or DEFAULT_MODEL
     job_data = {
         'files': files_data,
@@ -246,7 +270,8 @@ def api_create_job():
         'batch_size': batch_size,
         'custom_prompt': request.form.get('custom_prompt', ''),
         'thinking_budget': thinking_budget,
-        'api_key': api_key if api_key else None,
+        # 더 이상 DB에는 키를 저장하지 않습니다.
+        'api_key': None,
         'model': model_name
     }
     save_job(job_id, job_data)
@@ -303,6 +328,9 @@ def upload_srt():
     thinking_budget = request.form.get('thinking_budget', 8192)
     api_key = (request.form.get('api_key') or '').strip()
     model_name = (request.form.get('model') or '').strip() or DEFAULT_MODEL
+    # 사용자가 업로드 단계에서 키를 다시 보냈다면 .env에 저장/반영
+    if api_key:
+        save_api_key_to_env(api_key)
 
     # 중단 플래그 생성
     stop_flag = {'stopped': False}
@@ -317,9 +345,9 @@ def upload_srt():
     try:
         shared_client = GeminiClient(
             model=model_name,
-            api_key=api_key or None,
+            api_key=api_key if api_key else None,
             thinking_budget=thinking_budget_val,
-            rpm_limit=5,
+            rpm_limit=9,
             generation_config={
                 'max_output_tokens': 122880  # 120k 토큰
             }
