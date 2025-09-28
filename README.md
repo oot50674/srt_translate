@@ -51,7 +51,6 @@ project/
 ├── module/               # 주요 기능 모듈
 │   ├── database_module.py
 │   ├── gemini_module.py
-│   ├── ollama_module.py
 │   └── srt_module.py
 ├── static/               # 정적 파일 (CSS, JS)
 │   ├── css/
