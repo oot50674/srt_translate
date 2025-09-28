@@ -4,9 +4,19 @@ import tempfile
 import json
 import time
 import uuid
-from flask import Flask, render_template, request, jsonify, Response
+from flask import Flask, render_template, request, jsonify, Response, make_response
 from module import srt_module
 from module.gemini_module import GeminiClient
+from module.database_module import (
+    list_presets,
+    get_preset,
+    save_preset,
+    delete_preset,
+    save_job,
+    get_job,
+    delete_job,
+    delete_old_jobs,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -14,6 +24,11 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 DEFAULT_MODEL = "gemini-2.5-flash"
+
+
+def json_error(message: str, status: int = 400) -> Response:
+    """統一된 에러 Response 생성 (type checker 친화적)."""
+    return make_response(jsonify({'error': message}), status)
 
 # 업로드된 파일과 옵션을 임시로 보관하는 작업 저장소 (DB로 대체됨)
 # pending_jobs: dict[str, dict] = {}
@@ -203,6 +218,73 @@ def index():
 def progress():
     return render_template('progress.html')
 
+# ---------------------- Preset CRUD API ----------------------
+@app.route('/api/presets', methods=['GET'])
+def api_list_presets() -> Response:
+    try:
+        presets = list_presets()
+        return jsonify(presets)
+    except Exception as e:
+        logger.exception("프리셋 목록 조회 실패")
+        return json_error(f'failed to list presets: {e}', 500)
+
+@app.route('/api/presets/<name>', methods=['GET'])
+def api_get_preset_route(name: str) -> Response:
+    try:
+        preset = get_preset(name)
+        if not preset:
+            return json_error('not found', 404)
+        return jsonify(preset)
+    except Exception as e:
+        logger.exception("프리셋 조회 실패")
+        return json_error(f'failed to get preset: {e}', 500)
+
+@app.route('/api/presets/<name>', methods=['POST'])
+def api_save_preset_route(name: str) -> Response:
+    try:
+        data = request.get_json(silent=True) or {}
+        target_lang = (data.get('target_lang') or '').strip() or None
+        batch_size_raw = data.get('batch_size')
+        try:
+            batch_size = int(batch_size_raw) if batch_size_raw not in (None, '') else None
+        except (ValueError, TypeError):
+            batch_size = None
+        custom_prompt = data.get('custom_prompt') or None
+        thinking_raw = data.get('thinking_budget')
+        try:
+            thinking_budget = int(thinking_raw) if thinking_raw not in (None, '') else None
+        except (ValueError, TypeError):
+            thinking_budget = None
+        api_key_val = (data.get('api_key') or '').strip() or None
+        save_preset(
+            name=name,
+            target_lang=target_lang,
+            batch_size=batch_size,
+            custom_prompt=custom_prompt,
+            thinking_budget=thinking_budget,
+            api_key=api_key_val,
+        )
+        # api_key가 전달되면 전역 config에도 선택적으로 저장 (선택적 동작)
+        if api_key_val:
+            try:
+                from module.database_module import set_config
+                set_config('global_api_key', api_key_val)
+            except Exception:
+                pass
+        return jsonify({'status': 'saved'})
+    except Exception as e:
+        logger.exception("프리셋 저장 실패")
+        return json_error(f'failed to save preset: {e}', 500)
+
+@app.route('/api/presets/<name>', methods=['DELETE'])
+def api_delete_preset_route(name: str) -> Response:
+    try:
+        delete_preset(name)
+        return jsonify({'status': 'deleted'})
+    except Exception as e:
+        logger.exception("프리셋 삭제 실패")
+        return json_error(f'failed to delete preset: {e}', 500)
+
 @app.route('/api/jobs', methods=['POST'])
 def api_create_job():
     """업로드된 SRT 데이터와 옵션을 임시로 저장하고 작업 ID를 반환합니다."""
@@ -246,9 +328,17 @@ def api_create_job():
         'batch_size': batch_size,
         'custom_prompt': request.form.get('custom_prompt', ''),
         'thinking_budget': thinking_budget,
-        'api_key': api_key if api_key else None,
+        # api_key는 이제 job에 저장하지 않음 (전역 config 사용)
         'model': model_name
     }
+    # 전달된 api_key가 있으면 전역 config에 저장
+    if api_key:
+        try:
+            from module.database_module import set_config
+            set_config('global_api_key', api_key)
+            logger.info("전역 API 키 저장 완료 (job 생성 시)")
+        except Exception as e:
+            logger.warning("전역 API 키 저장 실패: %s", e)
     save_job(job_id, job_data)
     return jsonify({'job_id': job_id})
 
@@ -265,7 +355,7 @@ def api_delete_job(job_id):
     return jsonify({'status': 'deleted'})
 
 @app.route('/upload_srt', methods=['POST'])
-def upload_srt():
+def upload_srt() -> Response:
     """SRT 파일 업로드를 처리하고, 자막을 파싱하여 실시간으로 번역합니다."""
     logger.info("Upload SRT 요청 폼 데이터: %s", dict(request.form))
     
@@ -275,7 +365,7 @@ def upload_srt():
         if file:
             files = [file]
     if not files:
-        return jsonify({'error': 'file missing'}), 400
+        return json_error('file missing')
 
     temp_paths = []
     for f in files:
@@ -303,25 +393,38 @@ def upload_srt():
     thinking_budget = request.form.get('thinking_budget', 8192)
     api_key = (request.form.get('api_key') or '').strip()
     model_name = (request.form.get('model') or '').strip() or DEFAULT_MODEL
+    # 전역 config 기반 api_key fallback
+    if not api_key:
+        try:
+            from module.database_module import get_config
+            restored = get_config('global_api_key')
+            if restored:
+                api_key = restored.strip()
+                logger.info("config 테이블로부터 전역 API 키 복원")
+            else:
+                logger.info("config 테이블에 전역 API 키가 없습니다.")
+        except Exception as e:
+            logger.warning("전역 API 키 복원 실패: %s", e)
 
-    # 중단 플래그 생성
-    stop_flag = {'stopped': False}
+    if not api_key:
+        return json_error('API key missing')
 
-    # 모든 파일에서 공유할 단일 클라이언트 생성
+    # thinking_budget 정수 변환
     try:
-        thinking_budget_val = int(thinking_budget)
+        thinking_budget_val = int(thinking_budget)  # type: ignore[arg-type]
     except (ValueError, TypeError):
         logger.warning("thinking_budget 파라미터 변환 실패, 기본값 8192 사용: %s", thinking_budget)
         thinking_budget_val = 8192
-    
+
+    # GeminiClient 생성
     try:
         shared_client = GeminiClient(
             model=model_name,
-            api_key=api_key or None,
+            api_key=api_key,
             thinking_budget=thinking_budget_val,
             rpm_limit=5,
             generation_config={
-                'max_output_tokens': 122880  # 120k 토큰
+                'max_output_tokens': 122880
             }
         )
     except ValueError as exc:
@@ -331,118 +434,48 @@ def upload_srt():
                 os.remove(p)
             except Exception:
                 pass
-        return jsonify({'error': str(exc)}), 400
+        return json_error(str(exc))
+
     if thinking_budget_val <= 0:
         logger.info("Thinking 기능 비활성화됨 (thinking_budget=0)")
     else:
         logger.info(f"Thinking Budget 설정: {thinking_budget_val}")
-    
     shared_client.start_chat()
     logger.info("다중 파일 처리를 위한 공유 클라이언트가 생성되었습니다.")
 
+    stop_flag = {'stopped': False}
+
     def generate():
         try:
-            # 총 파일 수 전송
             yield json.dumps({'total_files': len(temp_paths)}) + "\n"
-            
             for name, path in temp_paths:
-                # 중단 플래그 확인
                 if stop_flag['stopped']:
                     logger.info("중단 플래그가 설정되어 파일 처리를 중지합니다.")
                     break
-                    
-                # 현재 처리 중인 파일 정보 전송
                 yield json.dumps({'current_file': name}) + "\n"
-                
                 with open(path, 'r', encoding='utf-8') as f:
                     srt_content = f.read()
-                
-                # 파일별 번역 결과를 스트림으로 전송 (공유 클라이언트 사용)
                 for line in translate_srt_stream(srt_content, shared_client, target_lang, batch_size, user_prompt, thinking_budget_val, stop_flag):
                     yield line
-                    # 중단 플래그 확인
                     if stop_flag['stopped']:
                         logger.info("중단 플래그가 설정되어 스트림 전송을 중지합니다.")
                         break
-                
-                # 파일 완료 신호
                 if not stop_flag['stopped']:
                     yield json.dumps({'file_completed': name}) + "\n"
         except GeneratorExit:
             logger.warning("클라이언트 연결이 중단되었습니다. 번역 작업을 중지합니다.")
             stop_flag['stopped'] = True
         finally:
-            # 임시 파일들 정리
             for _, p in temp_paths:
                 try:
                     os.remove(p)
-                except:
+                except Exception:
                     pass
 
     return Response(generate(), mimetype='text/plain')
 
-@app.route('/parse_srt', methods=['POST'])
-def parse_srt_route():
-    """클라이언트에서 전송된 SRT 텍스트를 파싱하여 전체 자막 배열을 반환합니다."""
-    data = request.get_json() or {}
-    content = data.get('srt_text', '')
-    if not content.strip():
-        return jsonify({'error': 'empty text'}), 400
-
-    subtitles = srt_module.parse_srt_text(content)
-    return jsonify(subtitles)
-
-# ----- Preset management API -----
-from module.database_module import (
-    list_presets,
-    get_preset,
-    save_preset,
-    delete_preset,
-    save_job,
-    get_job,
-    delete_job,
-    delete_old_jobs,
-)
-
-@app.route('/api/presets', methods=['GET'])
-def api_list_presets():
-    """Return all stored presets."""
-    return jsonify(list_presets())
-
-@app.route('/api/presets/<name>', methods=['GET'])
-def api_get_preset(name):
-    preset = get_preset(name)
-    if preset:
-        return jsonify(preset)
-    return jsonify({'error': 'not found'}), 404
-
-@app.route('/api/presets/<name>', methods=['POST'])
-def api_save_preset(name):
-    data = request.get_json() or {}
-    target_lang = data.get('target_lang')
-    batch_size = data.get('batch_size')
-    try:
-        batch_size = int(batch_size) if batch_size is not None else None
-    except (ValueError, TypeError):
-        batch_size = None
-    custom_prompt = data.get('custom_prompt')
-    thinking_budget = data.get('thinking_budget')
-    try:
-        thinking_budget = int(thinking_budget) if thinking_budget is not None else None
-    except (ValueError, TypeError):
-        thinking_budget = None
-    api_key = data.get('api_key')
-    if isinstance(api_key, str):
-        api_key = api_key.strip() or None
-    else:
-        api_key = None
-    save_preset(name, target_lang, batch_size, custom_prompt, thinking_budget, api_key)
-    return jsonify({'status': 'ok'})
-
-@app.route('/api/presets/<name>', methods=['DELETE'])
-def api_delete_preset(name):
-    delete_preset(name)
-    return jsonify({'status': 'deleted'})
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    # host='0.0.0.0' 로 두면 같은 네트워크 다른 기기에서도 접속 가능
+    # debug=True 는 코드 변경 시 자동 재시작 및 에러 페이지 제공
+    app.run(host='0.0.0.0', port=5000, debug=True)

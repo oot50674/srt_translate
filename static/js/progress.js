@@ -191,8 +191,9 @@ $(async function () {
         formData.append('batch_size', progressData.batch_size);
         formData.append('custom_prompt', progressData.custom_prompt);
         formData.append('thinking_budget', progressData.thinking_budget || '8192');
-    formData.append('api_key', progressData.api_key || '');
-    formData.append('model', progressData.model || storedModelName);
+        // api_key는 이제 job이나 업로드 단계에서 직접 전달하지 않고 서버 config 사용
+        formData.append('model', progressData.model || storedModelName);
+        formData.append('job_id', jobId); // 기존 호환 (사용 안할 수도 있음)
 
         let response;
         try {
