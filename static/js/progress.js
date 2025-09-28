@@ -5,7 +5,7 @@ $(async function () {
     const jobId = params.get('job');
 
     if (!jobId) {
-        alert('No translation data.');
+        Toast.alert('번역 작업 ID가 없습니다.');
         window.location.href = '/';
         return;
     }
@@ -63,7 +63,7 @@ $(async function () {
 
     const jobRes = await fetch('/api/jobs/' + encodeURIComponent(jobId));
     if (!jobRes.ok) {
-        alert('No translation data.');
+        Toast.alert('번역 데이터를 불러올 수 없습니다.');
         window.location.href = '/';
         return;
     }
@@ -87,7 +87,7 @@ $(async function () {
 
     const files = progressData.files || [];
     if (!files.length) {
-        alert('No translation data.');
+        Toast.alert('번역할 파일이 없습니다.');
         window.location.href = '/';
         return;
     }
@@ -426,7 +426,7 @@ $(async function () {
 
     if (result.stopped) {
         $('#progress-container').parent().hide();
-        $('#file-list').parent().append('<p class="mt-6 text-slate-800 font-semibold text-red-600">사용자에 의해 작업이 중지되었습니다.</p>');
+        Toast.alert('사용자에 의해 작업이 중지되었습니다.');
         $stopButton.hide();
     } else {
         $('#progress-container').parent().hide();

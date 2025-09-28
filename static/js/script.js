@@ -16,6 +16,15 @@ $(function () {
     const $disableThinkingCheckbox = $('#disable-thinking');
     const $apiKeyInput = $('#api-key');
     const $modelInput = $('#model-name');
+    const $saveApiKeyBtn = $('#save-api-key-btn');
+    const $openSettingsBtn = $('#open-settings-btn');
+    const $settingsPanel = $('#settings-panel');
+    const $settingsOverlay = $('#settings-overlay');
+    const $settingsCloseBtn = $('#settings-close-btn');
+    const SETTINGS_PANEL_STORAGE_KEY = 'settingsPanelOpen';
+    const $missingApiKeyAlert = $('#missing-api-key-alert');
+    const $panelMissingApiKeyAlert = $('#panel-missing-api-key-alert');
+    let missingApiKey = String($('body').data('missingApiKey')).toLowerCase() === 'true';
 
     if ($modelInput.length) {
         const storedModel = localStorage.getItem('modelName');
@@ -27,6 +36,112 @@ $(function () {
                 localStorage.setItem('modelName', value);
             } else {
                 localStorage.removeItem('modelName');
+            }
+        });
+    }
+
+    if ($settingsPanel.length && $openSettingsBtn.length) {
+        let panelOpen = localStorage.getItem(SETTINGS_PANEL_STORAGE_KEY) === 'true';
+        if (missingApiKey) {
+            panelOpen = true;
+        }
+
+        function applyPanelState(open) {
+            const isOpen = !!open;
+            $settingsPanel.toggleClass('translate-x-full', !isOpen);
+            $settingsOverlay.toggleClass('hidden', !isOpen);
+            $('body').toggleClass('overflow-hidden', isOpen);
+            $openSettingsBtn.attr('aria-expanded', String(isOpen));
+            $settingsPanel.attr('aria-hidden', String(!isOpen));
+            if (isOpen) {
+                localStorage.setItem(SETTINGS_PANEL_STORAGE_KEY, 'true');
+            } else {
+                localStorage.removeItem(SETTINGS_PANEL_STORAGE_KEY);
+            }
+        }
+
+        function openPanel() {
+            panelOpen = true;
+            applyPanelState(panelOpen);
+        }
+
+        function closePanel() {
+            panelOpen = false;
+            applyPanelState(panelOpen);
+        }
+
+        applyPanelState(panelOpen);
+
+        if (panelOpen && missingApiKey && $apiKeyInput.length) {
+            setTimeout(() => {
+                $apiKeyInput.trigger('focus');
+            }, 300);
+        }
+
+        $openSettingsBtn.on('click', function () {
+            openPanel();
+            if ($apiKeyInput.length) {
+                setTimeout(() => {
+                    $apiKeyInput.trigger('focus');
+                }, 200);
+            }
+        });
+
+        if ($settingsCloseBtn.length) {
+            $settingsCloseBtn.on('click', function () {
+                closePanel();
+            });
+        }
+
+        if ($settingsOverlay.length) {
+            $settingsOverlay.on('click', function () {
+                closePanel();
+            });
+        }
+
+        $(document).on('keydown', function (e) {
+            if (panelOpen && e.key === 'Escape') {
+                closePanel();
+            }
+        });
+    }
+
+    if ($saveApiKeyBtn.length && $apiKeyInput.length) {
+        $saveApiKeyBtn.on('click', async function () {
+            const apiKeyVal = ($apiKeyInput.val() || '').trim();
+            if (!apiKeyVal) {
+                alert('Google API Key를 입력해 주세요.');
+                $apiKeyInput.trigger('focus');
+                return;
+            }
+
+            $saveApiKeyBtn.prop('disabled', true).addClass('opacity-60 cursor-not-allowed');
+
+            try {
+                const res = await fetch('/api/settings/api-key', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ api_key: apiKeyVal })
+                });
+
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) {
+                    throw new Error(data.error || 'API Key 저장에 실패했습니다.');
+                }
+
+                alert('Google API Key가 저장되었습니다.');
+                missingApiKey = false;
+                $('body').attr('data-missing-api-key', 'false');
+                if ($missingApiKeyAlert.length) {
+                    $missingApiKeyAlert.remove();
+                }
+                if ($panelMissingApiKeyAlert.length) {
+                    $panelMissingApiKeyAlert.remove();
+                }
+            } catch (err) {
+                alert(err.message || 'API Key 저장 중 오류가 발생했습니다.');
+            } finally {
+                $saveApiKeyBtn.prop('disabled', false).removeClass('opacity-60 cursor-not-allowed');
             }
         });
     }

@@ -218,11 +218,22 @@ def translate_srt_stream(content: str, client, target_lang: str = '한국어', b
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    missing_api_key = not bool(os.environ.get('GOOGLE_API_KEY', '').strip())
+    return render_template('index.html', missing_api_key=missing_api_key)
 
 @app.route('/progress')
 def progress():
     return render_template('progress.html')
+
+
+@app.route('/api/settings/api-key', methods=['POST'])
+def api_save_google_api_key():
+    data = request.get_json(silent=True) or {}
+    api_key = (data.get('api_key') or '').strip()
+    if not api_key:
+        return jsonify({'error': 'API 키를 입력해 주세요.'}), 400
+    save_api_key_to_env(api_key)
+    return jsonify({'status': 'saved'})
 
 @app.route('/api/jobs', methods=['POST'])
 def api_create_job():
