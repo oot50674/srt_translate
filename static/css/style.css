@@ -84,6 +84,39 @@
     box-shadow: 0 1px 2px rgba(0,0,0,0.1);
 }
 
+/* 탭 스타일 */
+.tab-button {
+    color: #64748b;
+    background-color: transparent;
+}
+
+.tab-button.active {
+    color: #0c77f2;
+    background-color: white;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.tab-content {
+    display: block;
+}
+
+.tab-content.hidden {
+    display: none;
+}
+
+/* YouTube 자막 추출 관련 스타일 */
+#extract-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+#extracted-preview {
+    border: 1px solid #e2e8f0;
+    border-radius: 0.5rem;
+    padding: 1rem;
+    background-color: #f8fafc;
+}
+
 /* 모바일 반응형 스타일 */
 @media (max-width: 640px) {
     .mb-8 {
@@ -101,5 +134,14 @@
     .px-6 {
         padding-left: 1rem;
         padding-right: 1rem;
+    }
+    
+    .flex {
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+    
+    #extract-btn {
+        min-width: 100%;
     }
 }

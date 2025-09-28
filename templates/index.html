@@ -55,14 +55,37 @@
             <main class="px-40 flex justify-center py-10">
                 <div class="layout-content-container flex flex-col w-full max-w-3xl py-8 bg-white shadow-xl rounded-xl">
                     <div class="px-8 md:px-12">
-                        <h2
-                            class="text-slate-900 tracking-tight text-3xl font-bold leading-tight text-center pb-2 pt-6">
-                            자막 번역하기</h2>
-                        <p class="text-slate-600 text-base font-normal leading-relaxed pb-8 pt-2 text-center">
-                            SRT 자막 파일을 쉽게 번역하세요. 아래에 파일을 업로드하거나 내용을 직접 붙여넣으세요.
-                        </p>
-                        <!-- 데이터 전송은 JavaScript에서 처리합니다 -->
-                        <form id="srt-upload-form">
+                        <!-- 탭 네비게이션 -->
+                        <div class="flex justify-center mb-6 pt-6">
+                            <div class="flex bg-slate-100 rounded-lg p-1">
+                                <button id="srt-tab" class="tab-button active px-6 py-2 text-sm font-semibold rounded-md transition-colors">
+                                    SRT 파일 번역
+                                </button>
+                                <button id="youtube-tab" class="tab-button px-6 py-2 text-sm font-semibold rounded-md transition-colors">
+                                    YouTube 자막 추출
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- SRT 번역 탭 -->
+                        <div id="srt-content" class="tab-content">
+                            <h2 class="text-slate-900 tracking-tight text-3xl font-bold leading-tight text-center pb-2">
+                                자막 번역하기</h2>
+                            <p class="text-slate-600 text-base font-normal leading-relaxed pb-8 pt-2 text-center">
+                                SRT 자막 파일을 쉽게 번역하세요. 아래에 파일을 업로드하거나 내용을 직접 붙여넣으세요.
+                            </p>
+                        </div>
+
+                        <!-- YouTube 자막 추출 탭 -->
+                        <div id="youtube-content" class="tab-content hidden">
+                            <h2 class="text-slate-900 tracking-tight text-3xl font-bold leading-tight text-center pb-2">
+                                YouTube 자막 추출</h2>
+                            <p class="text-slate-600 text-base font-normal leading-relaxed pb-8 pt-2 text-center">
+                                YouTube 영상의 자막을 추출하여 번역하세요. URL을 입력하면 자동으로 자막을 가져옵니다.
+                            </p>
+                        </div>
+                        <!-- SRT 업로드 폼 -->
+                        <form id="srt-upload-form" class="tab-content">
                             <div class="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
                                 <div class="flex flex-col">
                                     <h3 class="text-slate-800 text-xl font-semibold leading-tight tracking-[-0.015em] mb-3">
@@ -91,7 +114,59 @@
                                     placeholder="자막 텍스트를 여기에 붙여넣으세요 (예: SRT 파일에서)"></textarea>
                                 </div>
                             </div>
-                            <div class="mt-6 flex flex-col gap-4">
+                        </form>
+
+                        <!-- YouTube 자막 추출 폼 -->
+                        <form id="youtube-form" class="tab-content hidden">
+                            <div class="mb-8">
+                                <h3 class="text-slate-800 text-xl font-semibold leading-tight tracking-[-0.015em] mb-3">
+                                    YouTube URL 입력</h3>
+                                <div class="flex gap-4">
+                                    <input type="url" id="youtube-url" 
+                                        class="form-input flex-1 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#0c77f2] border border-slate-300 bg-slate-50 focus:border-[#0c77f2] placeholder:text-slate-400 p-4 text-sm font-normal"
+                                        placeholder="YouTube URL을 입력하세요 (예: https://www.youtube.com/watch?v=VIDEO_ID)" />
+                                    <button type="button" id="extract-btn"
+                                        class="flex items-center gap-2 min-w-[120px] cursor-pointer justify-center overflow-hidden rounded-lg h-12 px-4 bg-[#0c77f2] text-slate-50 text-sm font-semibold leading-normal tracking-[0.015em] hover:bg-blue-600 transition-colors">
+                                        <span class="material-icons">download</span>
+                                        <span>자막 추출</span>
+                                    </button>
+                                </div>
+                                <p class="text-slate-500 text-sm mt-2">
+                                    지원 형식: youtube.com/watch?v=ID, youtu.be/ID, 또는 11자리 비디오 ID
+                                </p>
+                                
+                                <!-- 언어 설정 옵션 -->
+                                <div class="mt-4">
+                                    <label for="youtube-target-lang" class="block text-sm font-medium text-slate-700 mb-1">
+                                        목표 언어 (자막 추출/번역)
+                                    </label>
+                                    <select id="youtube-target-lang" class="form-select rounded-md border-slate-300 text-sm w-48">
+                                        <option value="ko">한국어 (Korean)</option>
+                                        <option value="en">영어 (English)</option>
+                                        <option value="ja">일본어 (Japanese)</option>
+                                        <option value="zh">중국어 (Chinese)</option>
+                                        <option value="es">스페인어 (Spanish)</option>
+                                        <option value="fr">프랑스어 (French)</option>
+                                        <option value="de">독일어 (German)</option>
+                                        <option value="it">이탈리아어 (Italian)</option>
+                                        <option value="pt">포르투갈어 (Portuguese)</option>
+                                        <option value="ru">러시아어 (Russian)</option>
+                                    </select>
+                                </div>
+                            </div>
+                            
+                            <!-- 추출된 자막 미리보기 -->
+                            <div id="extracted-preview" class="hidden mb-8">
+                                <h3 class="text-slate-800 text-xl font-semibold leading-tight tracking-[-0.015em] mb-3">
+                                    추출된 자막 미리보기</h3>
+                                <textarea id="extracted-text" readonly
+                                    class="form-input w-full resize-y rounded-lg text-slate-900 border border-slate-300 bg-slate-50 min-h-48 p-4 text-sm font-normal leading-normal"
+                                    placeholder="추출된 자막이 여기에 표시됩니다..."></textarea>
+                            </div>
+                        </form>
+                        
+                        <!-- 공통 번역 설정 -->
+                        <div class="mt-6 flex flex-col gap-4">
                                 <h3 class="text-slate-800 text-lg font-semibold">번역 설정</h3>
                                 <div>
                                     <label for="api-key" class="block text-sm font-medium text-slate-700 mb-1">Google API Key</label>
@@ -129,15 +204,14 @@
                                     <button type="button" id="save-preset-btn" class="px-3 py-2 bg-slate-200 rounded-md text-sm font-semibold hover:bg-slate-300">프리셋 저장</button>
                                 </div>
                             </div>
-                            </div>
                             <div class="flex justify-center pt-6">
-                                <button type="submit"
+                                <button type="button" id="translate-btn"
                                     class="flex items-center gap-2 min-w-[200px] max-w-[480px] cursor-pointer justify-center overflow-hidden rounded-lg h-12 px-6 bg-[#0c77f2] text-slate-50 text-base font-semibold leading-normal tracking-[0.015em] hover:bg-blue-600 transition-colors shadow-md hover:shadow-lg">
                                     <span class="material-icons">translate</span>
                                     <span class="truncate">번역 시작하기</span>
                                 </button>
                             </div>
-                        </form>
+                        </div>
                     </div>
                 </div>
             </main>

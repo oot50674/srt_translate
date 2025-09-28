@@ -1,5 +1,20 @@
 $(function () {
     const DEFAULT_MODEL = 'gemini-2.5-flash';
+    
+    // 탭 관련 요소들
+    const $srtTab = $('#srt-tab');
+    const $youtubeTab = $('#youtube-tab');
+    const $srtContent = $('#srt-content');
+    const $youtubeContent = $('#youtube-content');
+    const $srtForm = $('#srt-upload-form');
+    const $youtubeForm = $('#youtube-form');
+    
+    // YouTube 관련 요소들
+    const $youtubeUrl = $('#youtube-url');
+    const $extractBtn = $('#extract-btn');
+    const $extractedPreview = $('#extracted-preview');
+    const $extractedText = $('#extracted-text');
+    const $translateBtn = $('#translate-btn');
 
     const $selectBtn = $('#select-btn');
     const $fileInput = $('#srt-file');
@@ -312,6 +327,130 @@ $(function () {
             }
         });
     }
+
+    // 탭 전환 기능
+    function switchTab(activeTab) {
+        // 탭 버튼 스타일 업데이트
+        $('.tab-button').removeClass('active');
+        $(activeTab).addClass('active');
+        
+        // 콘텐츠 표시/숨김
+        if (activeTab === '#srt-tab') {
+            $srtContent.removeClass('hidden');
+            $youtubeContent.addClass('hidden');
+            $srtForm.removeClass('hidden');
+            $youtubeForm.addClass('hidden');
+        } else {
+            $srtContent.addClass('hidden');
+            $youtubeContent.removeClass('hidden');
+            $srtForm.addClass('hidden');
+            $youtubeForm.removeClass('hidden');
+        }
+    }
+    
+    // 탭 클릭 이벤트
+    $srtTab.on('click', function() {
+        switchTab('#srt-tab');
+    });
+    
+    $youtubeTab.on('click', function() {
+        switchTab('#youtube-tab');
+    });
+    
+    // YouTube 자막 추출 기능
+    $extractBtn.on('click', async function() {
+        const url = $youtubeUrl.val().trim();
+        if (!url) {
+            alert('YouTube URL을 입력하세요.');
+            return;
+        }
+        
+        // 목표 언어 가져오기
+        const targetLang = $('#youtube-target-lang').val() || 'ko';
+        
+        // 버튼 비활성화 및 로딩 상태
+        $extractBtn.prop('disabled', true);
+        const originalText = $extractBtn.find('span:last-child').text();
+        $extractBtn.find('span:last-child').text('추출 중...');
+        
+        try {
+            const response = await fetch('/api/youtube/extract', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ 
+                    url: url,
+                    target_lang: targetLang
+                })
+            });
+            
+            const data = await response.json();
+            
+            if (data.success) {
+                // 추출된 자막을 미리보기에 표시
+                $extractedText.val(data.srt_content);
+                $extractedPreview.removeClass('hidden');
+                
+                // SRT 텍스트 영역에도 복사
+                $textArea.val(data.srt_content);
+                
+                // 자세한 정보와 함께 알림 표시
+                const sourceInfo = data.source_transcript || '알 수 없음';
+                const langInfo = data.language ? ` (${data.language})` : '';
+                
+                alert(`자막 추출 완료!
+                
+📊 추출 정보:
+• 자막 개수: ${data.transcript_count}개
+• 소스: ${sourceInfo}${langInfo}
+• 비디오 ID: ${data.video_id}
+
+자막이 미리보기 영역과 SRT 텍스트 영역에 복사되었습니다.`);
+            } else {
+                let errorMsg = '자막 추출 실패: ' + data.error;
+                
+                // 에러 타입별 추가 안내
+                if (data.error_type === 'no_transcript') {
+                    errorMsg += '\n\n💡 이 비디오에는 사용 가능한 자막이 없습니다. 다른 비디오를 시도해보세요.';
+                } else if (data.error_type === 'transcripts_disabled') {
+                    errorMsg += '\n\n💡 이 비디오는 자막이 비활성화되어 있습니다.';
+                } else if (data.error_type === 'video_unavailable') {
+                    errorMsg += '\n\n💡 비디오 URL이나 ID를 다시 확인하세요.';
+                } else if (data.error_type === 'request_blocked' || data.error_type === 'ip_blocked') {
+                    errorMsg += '\n\n💡 IP가 차단되었습니다. 잠시 후 다시 시도하거나 다른 네트워크를 사용해보세요.';
+                }
+                
+                alert(errorMsg);
+            }
+        } catch (error) {
+            console.error('Error:', error);
+            alert('자막 추출 중 오류가 발생했습니다.\n\n네트워크 연결을 확인하고 다시 시도해주세요.');
+        } finally {
+            // 버튼 상태 복원
+            $extractBtn.prop('disabled', false);
+            $extractBtn.find('span:last-child').text(originalText);
+        }
+    });
+    
+    // 번역 버튼 클릭 이벤트 (기존 폼 제출 로직과 통합)
+    $translateBtn.on('click', function() {
+        // 현재 활성화된 탭에 따라 다른 처리
+        if (!$youtubeForm.hasClass('hidden')) {
+            // YouTube 탭이 활성화된 경우
+            if ($extractedText.val().trim() === '') {
+                alert('먼저 YouTube 자막을 추출하세요.');
+                return;
+            }
+            // 추출된 자막을 SRT 텍스트 영역에 복사
+            $textArea.val($extractedText.val());
+        }
+        
+        // 기존 폼 제출 로직 실행
+        if ($form.length) {
+            $form.trigger('submit');
+        }
+    });
 
     // Thinking Budget 비활성화 체크박스 처리
     if ($disableThinkingCheckbox.length && $thinkingBudgetInput.length) {
