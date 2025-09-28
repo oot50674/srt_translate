@@ -51,40 +51,7 @@ def init_db() -> None:
             )
             """
         )
-        # 전역 설정 저장용 config 테이블 (key/value)
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS config (
-                key TEXT PRIMARY KEY,
-                value TEXT
-            )
-            """
-        )
         conn.commit()
-
-def set_config(key: str, value: Optional[str]) -> None:
-    """Insert or update a configuration value.
-
-    Args:
-        key: 설정 키.
-        value: 저장할 문자열 값 (None 전달 시 값 NULL 저장).
-    """
-    with get_connection() as conn:
-        conn.execute(
-            """
-            INSERT INTO config (key, value) VALUES (?, ?)
-            ON CONFLICT(key) DO UPDATE SET value=excluded.value
-            """,
-            (key, value)
-        )
-        conn.commit()
-
-def get_config(key: str) -> Optional[str]:
-    """Fetch a configuration value by key."""
-    with get_connection() as conn:
-        cur = conn.execute("SELECT value FROM config WHERE key=?", (key,))
-        row = cur.fetchone()
-    return row[0] if row and row[0] is not None else None
 
 
 def save_preset(

@@ -1,7 +1,7 @@
 import logging
 import os
 import re
-from typing import List, Dict, Any, TypedDict, Union
+from typing import List, Dict, Any
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -12,15 +12,9 @@ SRT_PATTERN = re.compile(
 )
 
 
-class Subtitle(TypedDict):
-    index: int
-    start: str
-    end: str
-    text: str
-
-def _parse_srt_content(content: str) -> List[Subtitle]:
+def _parse_srt_content(content: str) -> List[Dict[str, str]]:
     """주어진 SRT 형식 문자열을 파싱하여 자막 정보를 반환합니다."""
-    subtitles: List[Subtitle] = []
+    subtitles: List[Dict[str, str]] = []
     for match in SRT_PATTERN.finditer(content):
         index = int(match.group(1))
         start = match.group(2).strip()
@@ -36,7 +30,7 @@ def _parse_srt_content(content: str) -> List[Subtitle]:
     return subtitles
 
 
-def read_srt(file_path: str) -> List[Subtitle]:
+def read_srt(file_path: str) -> List[Dict[str, str]]:
     """SRT 파일을 읽어 자막 정보를 리스트로 반환합니다.
 
     Args:
@@ -53,7 +47,7 @@ def read_srt(file_path: str) -> List[Subtitle]:
     return _parse_srt_content(content)
 
 
-def parse_srt_text(content: str) -> List[Subtitle]:
+def parse_srt_text(content: str) -> List[Dict[str, str]]:
     """SRT 형식의 문자열을 파싱하여 자막 리스트를 반환합니다."""
     return _parse_srt_content(content)
 
