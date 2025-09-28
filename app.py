@@ -8,6 +8,7 @@ from flask import Flask, render_template, request, jsonify, Response
 from dotenv import load_dotenv, set_key
 from module import srt_module
 from module.gemini_module import GeminiClient
+from module.youtube_module import extract_youtube_transcript
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -471,6 +472,50 @@ def api_save_preset(name):
 def api_delete_preset(name):
     delete_preset(name)
     return jsonify({'status': 'deleted'})
+
+@app.route('/api/youtube/extract', methods=['POST'])
+def api_youtube_extract():
+    """YouTube URL에서 자막을 추출하는 API 엔드포인트"""
+    try:
+        data = request.get_json()
+        if not data or 'url' not in data:
+            return jsonify({
+                'success': False,
+                'error': 'YouTube URL이 필요합니다.',
+                'error_type': 'missing_url'
+            }), 400
+        
+        url = data['url'].strip()
+        if not url:
+            return jsonify({
+                'success': False,
+                'error': 'YouTube URL이 비어있습니다.',
+                'error_type': 'empty_url'
+            }), 400
+        
+        # 목표 언어 설정 (기본값: 한국어)
+        target_lang = data.get('target_lang', 'ko')
+        
+        # 선호 언어 목록 설정 (선택사항)
+        languages = data.get('languages')  # None이면 모듈에서 기본값 사용
+        
+        # YouTube 자막 추출 (다국어 지원)
+        result = extract_youtube_transcript(url, target_lang, languages)
+        
+        if result['success']:
+            logger.info(f"YouTube 자막 추출 성공: {result['video_id']}, {result['transcript_count']}개 항목")
+            return jsonify(result)
+        else:
+            logger.warning(f"YouTube 자막 추출 실패: {result['error']}")
+            return jsonify(result), 400
+            
+    except Exception as e:
+        logger.exception("YouTube 자막 추출 API에서 예상치 못한 오류 발생:")
+        return jsonify({
+            'success': False,
+            'error': f'서버 오류가 발생했습니다: {str(e)}',
+            'error_type': 'server_error'
+        }), 500
 
 if __name__ == '__main__':
     app.run(debug=True)
