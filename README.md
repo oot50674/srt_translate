@@ -69,25 +69,3 @@ project/
 ## 기여
 
 이 프로젝트에 기여하고 싶다면, 이슈를 생성하거나 풀 리퀘스트를 제출해주세요. 감사합니다!
-
-## 가상환경 설정 및 활성화
-
-1. 가상환경 생성:
-```bash
-python -m venv .venv
-```
-
-2. 가상환경 활성화:
-- Windows:
-```bash
-.venv\Scripts\activate
-```
-- macOS/Linux:
-```bash
-source .venv/bin/activate
-```
-
-3. 가상환경 비활성화:
-```bash
-deactivate
-```
