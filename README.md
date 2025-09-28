@@ -1,11 +1,11 @@
 # 번역 서비스 웹 애플리케이션
+Flask를 이용한 번역 서비스 웹 애플리케이션입니다
 
 <img width="1369" height="1266" alt="image" src="https://github.com/user-attachments/assets/486b308d-2499-4ee0-85a3-a08cad3c47f5" />
-
+업로드 화면
 
 <img width="1369" height="1247" alt="image" src="https://github.com/user-attachments/assets/baebd883-fc0d-4e15-97b8-df84d79d2e68" />
-
-Flask를 이용한 번역 서비스 웹 애플리케이션입니다.
+진행화면
 
 ## 기능
 
