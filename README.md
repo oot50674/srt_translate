@@ -1,7 +1,7 @@
 # 번역 서비스 웹 애플리케이션
 Flask를 이용한 번역 서비스 웹 애플리케이션입니다
 
-<img width="1675" height="1061" alt="image" src="https://github.com/user-attachments/assets/2db12764-7abe-40a3-a6c2-f0124202b4a6" />
+<img width="1675" height="1061" alt="image" src="https://github.com/user-attachments/assets/2db12764-7abe-40a3-a6c2-f0124202b4a6" /><br><br>
 <img width="1675" height="1061" alt="image" src="https://github.com/user-attachments/assets/941c2995-15d7-492f-9dac-053be9546fa9" />
 업로드 화면<br><br>
   
