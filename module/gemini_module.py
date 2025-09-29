@@ -44,7 +44,7 @@ class GeminiClient:
             response_mime_type (str, optional): 응답 MIME 타입 (기본값: response_schema 사용시 "application/json").
             context_compression_enabled (bool): 컨텍스트 압축 사용 여부.
             context_limit_tokens (int, optional): 히스토리 토큰 제한 (추정치 기반).
-            context_keep_recent (int): 압축 시 유지할 최신 턴 수 (자막 재구성 시 최근 엔트리 수도 지정).
+            context_keep_recent (int): 자막 재구성 시 최근 엔트리 수도 지정.
             **kwargs: 추가 설정 옵션들.
         
         Raises:
