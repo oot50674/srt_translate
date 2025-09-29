@@ -135,6 +135,8 @@
                                 <div class="flex items-center gap-2">
                                     <select id="preset-select" class="form-select rounded-md border-slate-300 text-sm"></select>
                                     <button type="button" id="save-preset-btn" class="px-3 py-2 bg-slate-200 rounded-md text-sm font-semibold hover:bg-slate-300">프리셋 저장</button>
+                                    <!-- 새 프리셋 생성 버튼 추가 -->
+                                    <button type="button" id="new-preset-btn" class="px-3 py-2 bg-slate-900 text-white rounded-md text-sm font-semibold hover:bg-slate-700">새로 만들기</button>
                                 </div>
                             </div>
                                 <div class="flex justify-center pt-6">
@@ -209,8 +211,8 @@
         </div>
     </aside>
 
-    <script src="{{ url_for('static', filename='js/script.js') }}"></script>
     <script src="{{ url_for('static', filename='js/toast.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/script.js') }}"></script>
 </body>
 
 </html>

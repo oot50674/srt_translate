@@ -1,6 +1,11 @@
 $(function () {
     const DEFAULT_MODEL = 'gemini-2.5-flash';
 
+    // 토스트 기본 위치를 상단 중앙으로 설정
+    if (window.Toast && typeof window.Toast.setDefaults === 'function') {
+        Toast.setDefaults({ position: 'top-center' });
+    }
+
     const $selectBtn = $('#select-btn');
     const $fileInput = $('#srt-file');
     const $fileUploadText = $('#file-upload-text');
@@ -12,6 +17,7 @@ $(function () {
     const $customPromptInput = $('#custom-prompt');
     const $presetSelect = $('#preset-select');
     const $savePresetBtn = $('#save-preset-btn');
+    const $newPresetBtn = $('#new-preset-btn');
     const $thinkingBudgetInput = $('#thinking-budget');
     const $disableThinkingCheckbox = $('#disable-thinking');
     const $apiKeyInput = $('#api-key');
@@ -112,7 +118,7 @@ $(function () {
         $saveApiKeyBtn.on('click', async function () {
             const apiKeyVal = ($apiKeyInput.val() || '').trim();
             if (!apiKeyVal) {
-                alert('Google API Key를 입력해 주세요.');
+                Toast.info('Google API Key를 입력해 주세요.');
                 $apiKeyInput.trigger('focus');
                 return;
             }
@@ -131,7 +137,7 @@ $(function () {
                     throw new Error(data.error || 'API Key 저장에 실패했습니다.');
                 }
 
-                alert('Google API Key가 저장되었습니다.');
+                Toast.info('Google API Key가 저장되었습니다.');
                 missingApiKey = false;
                 $('body').attr('data-missing-api-key', 'false');
                 if ($missingApiKeyAlert.length) {
@@ -141,7 +147,7 @@ $(function () {
                     $panelMissingApiKeyAlert.remove();
                 }
             } catch (err) {
-                alert(err.message || 'API Key 저장 중 오류가 발생했습니다.');
+                Toast.alert(err.message || 'API Key 저장 중 오류가 발생했습니다.');
             } finally {
                 $saveApiKeyBtn.prop('disabled', false).removeClass('opacity-60 cursor-not-allowed');
             }
@@ -261,7 +267,7 @@ $(function () {
                         $fileInput[0].files = files;
                         updateFileName(files);
                     } else {
-                        alert('SRT 파일만 업로드할 수 있습니다.');
+                        Toast.alert('SRT 파일만 업로드할 수 있습니다.');
                         $fileInput.val('');
                         updateFileName(null);
                     }
@@ -384,9 +390,50 @@ $(function () {
         });
     }
 
+    // '저장' 버튼: 현재 선택된 프리셋이 있으면 갱신(update), 없으면 새로 만들기
     if ($savePresetBtn.length) {
         $savePresetBtn.on('click', async function () {
-            const name = prompt('프리셋 이름을 입력하세요');
+            const current = $presetSelect.length ? $presetSelect.val() : null;
+            const preset = {
+                target_lang: $targetLangInput.val() || '',
+                batch_size: $chunkSizeInput.val() || '',
+                custom_prompt: $customPromptInput.val() || '',
+                thinking_budget: $disableThinkingCheckbox.is(':checked') ? '0' : $thinkingBudgetInput.val() || '',
+                api_key: $apiKeyInput.length ? $apiKeyInput.val() || '' : '',
+                context_compression: $contextCompressionCheckbox.length ? ($contextCompressionCheckbox.is(':checked') ? '1' : '0') : '',
+                context_limit: $contextLimitInput.length ? $contextLimitInput.val() || '' : ''
+            };
+
+                if (current) {
+                // 업데이트: 선택된 프리셋 이름으로 덮어쓰기
+                    try {
+                        await savePreset(current, preset);
+                        await populatePresetOptions();
+                        if ($presetSelect.length) $presetSelect.val(current);
+                        Toast.info('프리셋이 갱신되었습니다.');
+                    } catch (err) {
+                        Toast.alert('프리셋 갱신에 실패했습니다.');
+                    }
+            } else {
+                // 선택된 프리셋이 없으면 새 이름을 받아 생성
+                const name = prompt('저장할 프리셋 이름을 입력하세요');
+                if (!name) return;
+                try {
+                    await savePreset(name, preset);
+                    await populatePresetOptions();
+                    if ($presetSelect.length) $presetSelect.val(name);
+                    Toast.info('프리셋이 저장되었습니다.');
+                } catch (err) {
+                    Toast.alert('프리셋 저장에 실패했습니다.');
+                }
+            }
+        });
+    }
+
+    // '새로 만들기' 버튼: 항상 새 이름을 입력받아 새로운 프리셋 생성
+    if ($newPresetBtn.length) {
+        $newPresetBtn.on('click', async function () {
+            const name = prompt('새 프리셋 이름을 입력하세요');
             if (!name) return;
             const preset = {
                 target_lang: $targetLangInput.val() || '',
@@ -397,10 +444,14 @@ $(function () {
                 context_compression: $contextCompressionCheckbox.length ? ($contextCompressionCheckbox.is(':checked') ? '1' : '0') : '',
                 context_limit: $contextLimitInput.length ? $contextLimitInput.val() || '' : ''
             };
-            await savePreset(name, preset);
-            await populatePresetOptions();
-            if ($presetSelect.length) $presetSelect.val(name);
-            alert('프리셋이 저장되었습니다.');
+                try {
+                    await savePreset(name, preset);
+                    await populatePresetOptions();
+                    if ($presetSelect.length) $presetSelect.val(name);
+                    Toast.info('새 프리셋이 생성되었습니다.');
+                } catch (err) {
+                    Toast.alert('프리셋 생성에 실패했습니다.');
+                }
         });
     }
 
@@ -428,7 +479,7 @@ $(function () {
                     formData.append('srt_files', f, f.name);
                 }
             } else {
-                alert('SRT 파일을 선택하거나 텍스트를 입력하세요.');
+                Toast.alert('SRT 파일을 선택하거나 텍스트를 입력하세요.');
                 return;
             }
 
@@ -449,7 +500,7 @@ $(function () {
             if (data.job_id) {
                 window.location.href = '/progress?job=' + encodeURIComponent(data.job_id);
             } else {
-                alert(data.error || '작업 생성 실패');
+                Toast.alert(data.error || '작업 생성 실패');
             }
         });
     }
