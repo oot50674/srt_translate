@@ -165,7 +165,11 @@
     <aside id="settings-panel" role="dialog" aria-modal="true"
         class="fixed inset-y-0 right-0 z-50 w-full max-w-sm bg-white shadow-2xl transform translate-x-full transition-transform duration-300 ease-in-out flex flex-col">
         <div class="flex items-center justify-between px-6 py-4 border-b border-slate-200">
-            <h3 class="text-slate-800 text-lg font-semibold">추가 설정</h3>
+            <div class="flex items-center gap-3">
+                <h3 class="text-slate-800 text-lg font-semibold">추가 설정</h3>
+                <!-- 설정 저장 상태 인디케이터: JS에서 내용/스타일 갱신 -->
+                <div id="config-save-indicator" class="text-xs font-medium text-slate-500" style="display:none" aria-live="polite" aria-label="설정 저장 상태" title=""></div>
+            </div>
             <button type="button" id="settings-close-btn"
                 class="rounded-full p-2 text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-colors"
                 aria-label="설정 닫기">
@@ -206,6 +210,12 @@
                 <div>
                     <label for="context-limit" class="block text-sm font-medium text-slate-700 mb-1">컨텍스트 제한 (토큰)</label>
                     <input type="number" id="context-limit" class="form-input w-full rounded-md border-slate-300" min="5000" step="1" value="20000" />
+                </div>
+                <!-- 추가 설정 (Config) 은 프리셋과 완전히 별개입니다. RPM 제한은 전역 레이트리미트로 적용됩니다. -->
+                <div>
+                    <label for="rpm-limit" class="block text-sm font-medium text-slate-700 mb-1">RPM 제한<span class="text-xs text-slate-500 ml-1">(Requests Per Minute)</span></label>
+                    <input type="number" id="rpm-limit" class="form-input w-full rounded-md border-slate-300" min="1" step="1" value="9" />
+                    <p class="text-xs text-slate-500 mt-1">모델 호출 최대 횟수/분. 너무 낮게 설정하면 번역이 지연될 수 있습니다.</p>
                 </div>
             </div>
         </div>

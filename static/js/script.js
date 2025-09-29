@@ -29,7 +29,9 @@ $(function () {
     const $settingsCloseBtn = $('#settings-close-btn');
     const $contextCompressionCheckbox = $('#context-compression');
     const $contextLimitInput = $('#context-limit');
+    const $rpmLimitInput = $('#rpm-limit');
     const SETTINGS_PANEL_STORAGE_KEY = 'settingsPanelOpen';
+    const $configSaveIndicator = $('#config-save-indicator');
     const $missingApiKeyAlert = $('#missing-api-key-alert');
     const $panelMissingApiKeyAlert = $('#panel-missing-api-key-alert');
     let missingApiKey = String($('body').data('missingApiKey')).toLowerCase() === 'true';
@@ -114,40 +116,154 @@ $(function () {
         });
     }
 
+    // ---------------- Config (추가 설정) 관리 ----------------
+    // 프리셋과 완전히 독립. 서버의 /api/config 엔드포인트와 동기화.
+    let configLoaded = false;
+    let saveTimer = null;
+    const SAVE_DEBOUNCE_MS = 600;
+
+    function applyConfigToUI(cfg) {
+        if (!cfg || typeof cfg !== 'object') return;
+        // 모델명
+        if ($modelInput.length && cfg.model_name) {
+            $modelInput.val(cfg.model_name);
+        }
+        // context compression
+        if ($contextCompressionCheckbox.length && Object.prototype.hasOwnProperty.call(cfg, 'context_compression')) {
+            $contextCompressionCheckbox.prop('checked', !!cfg.context_compression);
+        }
+        // context limit
+        if ($contextLimitInput.length && cfg.context_limit) {
+            $contextLimitInput.val(cfg.context_limit);
+        }
+        // rpm limit
+        if ($rpmLimitInput.length && cfg.rpm_limit) {
+            $rpmLimitInput.val(cfg.rpm_limit);
+        }
+        // API Key preview -> placeholder로 표시
+        if ($apiKeyInput.length && cfg.api_key_preview) {
+            $apiKeyInput.attr('placeholder', '저장됨: ' + cfg.api_key_preview);
+        }
+        // context-limit input 상태 적용 (compression 여부 따라)
+        syncContextInputState();
+    }
+
+    async function loadConfig() {
+        try {
+            const res = await fetch('/api/config');
+            if (!res.ok) throw new Error('config load failed');
+            const data = await res.json();
+            applyConfigToUI(data);
+            configLoaded = true;
+        } catch (e) {
+            console.warn('Failed to load config', e);
+        }
+    }
+
+    function gatherConfigPayload(extra = {}) {
+        const payload = {};
+        if ($modelInput.length && $modelInput.val().trim()) payload.model_name = $modelInput.val().trim();
+        if ($contextCompressionCheckbox.length) payload.context_compression = $contextCompressionCheckbox.is(':checked') ? 1 : 0;
+        if ($contextLimitInput.length && $contextLimitInput.val()) payload.context_limit = $contextLimitInput.val();
+        if ($rpmLimitInput.length && $rpmLimitInput.val()) payload.rpm_limit = $rpmLimitInput.val();
+        return Object.assign(payload, extra || {});
+    }
+
+    // 인디케이터 정책:
+    // - 기본(대기): 완전히 숨김 (display: none)
+    // - saving: "저장 중..." 텍스트 표시
+    // - saved: "저장됨" 1.8초 표시 후 숨김
+    // - error: "저장 실패" 유지 (사용자 후속 변경 시 재시도)
+    function setConfigIndicator(state) {
+        if (!$configSaveIndicator.length) return;
+        const el = $configSaveIndicator;
+        let text = '';
+        let aria = '';
+        let hideDelay = null;
+        switch (state) {
+            case 'saving':
+                text = '저장 중...';
+                aria = '설정 저장 중';
+                break;
+            case 'saved':
+                text = '저장됨';
+                aria = '설정 저장 완료';
+                hideDelay = 1800;
+                break;
+            case 'error':
+                text = '저장 실패';
+                aria = '설정 저장 실패';
+                break;
+            default:
+                // idle
+                break;
+        }
+        if (!text) {
+            el.text('').attr('aria-label', '설정 저장 상태: 대기').attr('title', '');
+            el.css('display', 'none');
+            return;
+        }
+        el.text(text)
+          .attr('aria-label', aria)
+          .attr('title', aria)
+          .css('display', 'inline-block');
+        if (hideDelay) {
+            setTimeout(() => {
+                // 상태가 여전히 saved 텍스트이면 숨김
+                if (el.text() === '저장됨') {
+                    el.text('').css('display', 'none').attr('title', '').attr('aria-label', '설정 저장 상태: 대기');
+                }
+            }, hideDelay);
+        }
+    }
+
+    async function saveConfig(partial) {
+        if (!partial || Object.keys(partial).length === 0) return;
+        try {
+            setConfigIndicator('saving');
+            const body = JSON.stringify(partial);
+            const res = await fetch('/api/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || '설정 저장 실패');
+            setConfigIndicator('saved');
+            loadConfig();
+        } catch (e) {
+            setConfigIndicator('error');
+            console.error(e);
+        }
+    }
+
+    function scheduleAutoSave() {
+        if (saveTimer) clearTimeout(saveTimer);
+        saveTimer = setTimeout(() => {
+            const payload = gatherConfigPayload();
+            if (Object.keys(payload).length > 0) {
+                saveConfig(payload);
+            }
+        }, SAVE_DEBOUNCE_MS);
+    }
+
     if ($saveApiKeyBtn.length && $apiKeyInput.length) {
         $saveApiKeyBtn.on('click', async function () {
             const apiKeyVal = ($apiKeyInput.val() || '').trim();
             if (!apiKeyVal) {
-                Toast.info('Google API Key를 입력해 주세요.');
+                // API Key 미입력시 인디케이터는 변하지 않고 포커스만 이동
                 $apiKeyInput.trigger('focus');
                 return;
             }
-
             $saveApiKeyBtn.prop('disabled', true).addClass('opacity-60 cursor-not-allowed');
-
             try {
-                const res = await fetch('/api/settings/api-key', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ api_key: apiKeyVal })
-                });
-
-                const data = await res.json().catch(() => ({}));
-                if (!res.ok) {
-                    throw new Error(data.error || 'API Key 저장에 실패했습니다.');
-                }
-
-                Toast.info('Google API Key가 저장되었습니다.');
+                const payload = gatherConfigPayload({ api_key: apiKeyVal });
+                await saveConfig(payload);
+                $apiKeyInput.val(''); // 실제 키는 다시 표기하지 않음
                 missingApiKey = false;
                 $('body').attr('data-missing-api-key', 'false');
-                if ($missingApiKeyAlert.length) {
-                    $missingApiKeyAlert.remove();
-                }
-                if ($panelMissingApiKeyAlert.length) {
-                    $panelMissingApiKeyAlert.remove();
-                }
-            } catch (err) {
-                Toast.alert(err.message || 'API Key 저장 중 오류가 발생했습니다.');
+                if ($missingApiKeyAlert.length) $missingApiKeyAlert.remove();
+                if ($panelMissingApiKeyAlert.length) $panelMissingApiKeyAlert.remove();
             } finally {
                 $saveApiKeyBtn.prop('disabled', false).removeClass('opacity-60 cursor-not-allowed');
             }
@@ -326,55 +442,15 @@ $(function () {
     }
 
     async function applyPreset(name) {
+        // NOTE: 프리셋은 번역 작업 시 사용할 기본 설정을 저장하는 용도입니다.
+        // 추가 설정 패널의 값들은 프리셋과 별개의 독립적인 값으로,
+        // 프리셋 선택 시 추가 설정이 자동으로 변경되지 않아야 합니다.
+        // 아래 코드는 현재 프리셋 선택 시 추가 설정도 변경하는 잘못된 구현입니다.
         const p = await fetchPreset(name);
         if (!p) return;
         if ($targetLangInput.length) $targetLangInput.val(p.target_lang || '');
         if ($chunkSizeInput.length) $chunkSizeInput.val(p.batch_size || '');
         if ($customPromptInput.length) $customPromptInput.val(p.custom_prompt || '');
-
-        if ($apiKeyInput.length) {
-            if (p.api_key) {
-                $apiKeyInput.val(p.api_key);
-            } else {
-                $apiKeyInput.val('');
-            }
-        }
-
-        if ($modelInput.length) {
-            // 프리셋은 모델명을 저장하지 않으므로 기존 입력값 유지.
-            const storedModel = localStorage.getItem('modelName');
-            if (!storedModel && !$modelInput.val()) {
-                $modelInput.val(DEFAULT_MODEL);
-            }
-        }
-        
-        // Thinking Budget 설정 적용
-        if ($thinkingBudgetInput.length) {
-            const thinkingBudget = p.thinking_budget;
-            if (thinkingBudget === '0' || thinkingBudget === 0) {
-                $disableThinkingCheckbox.prop('checked', true).trigger('change');
-            } else {
-                $disableThinkingCheckbox.prop('checked', false).trigger('change');
-                $thinkingBudgetInput.val(thinkingBudget || '8192');
-            }
-        }
-
-        if ($contextCompressionCheckbox.length && $contextLimitInput.length) {
-            const compressionRaw = p.context_compression;
-            const enabled = compressionRaw === 1 || compressionRaw === '1' || String(compressionRaw).toLowerCase() === 'true';
-            const limitValue = p.context_limit ?? '';
-
-            $contextCompressionCheckbox.prop('checked', enabled);
-            if (limitValue === '' || limitValue === null) {
-                $contextLimitInput.val('');
-                sessionStorage.removeItem('contextLimit');
-            } else {
-                $contextLimitInput.val(limitValue);
-                sessionStorage.setItem('contextLimit', String(limitValue));
-            }
-            localStorage.setItem('contextCompressionEnabled', enabled ? 'true' : 'false');
-            $contextCompressionCheckbox.trigger('change');
-        }
     }
 
     if ($presetSelect.length) {
@@ -391,17 +467,16 @@ $(function () {
     }
 
     // '저장' 버튼: 현재 선택된 프리셋이 있으면 갱신(update), 없으면 새로 만들기
+    // 프리셋은 '번역 기본 파라미터'만 저장합니다.
+    // 추가 설정(API 키, 모델, Thinking Budget, 컨텍스트 압축 등)은 세션/사용자 환경 설정이며 프리셋과 완전히 분리됩니다.
     if ($savePresetBtn.length) {
         $savePresetBtn.on('click', async function () {
             const current = $presetSelect.length ? $presetSelect.val() : null;
             const preset = {
                 target_lang: $targetLangInput.val() || '',
                 batch_size: $chunkSizeInput.val() || '',
-                custom_prompt: $customPromptInput.val() || '',
-                thinking_budget: $disableThinkingCheckbox.is(':checked') ? '0' : $thinkingBudgetInput.val() || '',
-                api_key: $apiKeyInput.length ? $apiKeyInput.val() || '' : '',
-                context_compression: $contextCompressionCheckbox.length ? ($contextCompressionCheckbox.is(':checked') ? '1' : '0') : '',
-                context_limit: $contextLimitInput.length ? $contextLimitInput.val() || '' : ''
+                custom_prompt: $customPromptInput.val() || ''
+                // NOTE: 추가 설정 필드는 절대 프리셋에 포함하지 않습니다.
             };
 
                 if (current) {
@@ -431,6 +506,7 @@ $(function () {
     }
 
     // '새로 만들기' 버튼: 항상 새 이름을 입력받아 새로운 프리셋 생성
+    // 동일하게 번역 관련 3개 필드만 저장합니다.
     if ($newPresetBtn.length) {
         $newPresetBtn.on('click', async function () {
             const name = prompt('새 프리셋 이름을 입력하세요');
@@ -438,11 +514,8 @@ $(function () {
             const preset = {
                 target_lang: $targetLangInput.val() || '',
                 batch_size: $chunkSizeInput.val() || '',
-                custom_prompt: $customPromptInput.val() || '',
-                thinking_budget: $disableThinkingCheckbox.is(':checked') ? '0' : $thinkingBudgetInput.val() || '',
-                api_key: $apiKeyInput.length ? $apiKeyInput.val() || '' : '',
-                context_compression: $contextCompressionCheckbox.length ? ($contextCompressionCheckbox.is(':checked') ? '1' : '0') : '',
-                context_limit: $contextLimitInput.length ? $contextLimitInput.val() || '' : ''
+                custom_prompt: $customPromptInput.val() || ''
+                // 추가 설정 필드 제외
             };
                 try {
                     await savePreset(name, preset);
@@ -519,6 +592,17 @@ $(function () {
     }
 
     // Context Compression 토글 처리: 토글이 활성화되어야 컨텍스트 제한 입력을 사용할 수 있음
+    function syncContextInputState() {
+        if (!($contextCompressionCheckbox.length && $contextLimitInput.length)) return;
+        const enabled = $contextCompressionCheckbox.is(':checked');
+        $contextLimitInput.prop('disabled', !enabled);
+        if (!enabled) {
+            $contextLimitInput.addClass('opacity-50 bg-slate-100');
+        } else {
+            $contextLimitInput.removeClass('opacity-50 bg-slate-100');
+        }
+    }
+
     if ($contextCompressionCheckbox.length && $contextLimitInput.length) {
         // 초기 상태: 로컬스토리지에 저장된 값이 있으면 체크박스에 적용
         const storedCompression = localStorage.getItem('contextCompressionEnabled');
@@ -533,25 +617,16 @@ $(function () {
             $contextLimitInput.val(storedLimit);
         }
 
-        const applyContextInputState = () => {
-            const enabled = $contextCompressionCheckbox.is(':checked');
-            $contextLimitInput.prop('disabled', !enabled);
-            if (!enabled) {
-                $contextLimitInput.addClass('opacity-50 bg-slate-100');
-            } else {
-                $contextLimitInput.removeClass('opacity-50 bg-slate-100');
-            }
-        };
-
-        // 초기 적용
-        applyContextInputState();
+        // 초기 적용 (config 로드 전 임시)
+        syncContextInputState();
 
         $contextCompressionCheckbox.on('change', function () {
             const enabled = $(this).is(':checked');
             // UI 동작
-            applyContextInputState();
+            syncContextInputState();
             // 사용자 설정 로컬 저장 (백엔드와 동기화됨)
             localStorage.setItem('contextCompressionEnabled', enabled ? 'true' : 'false');
+            scheduleAutoSave();
         });
 
         // context-limit 변경 시 세션에 저장
@@ -562,6 +637,21 @@ $(function () {
             } else {
                 sessionStorage.setItem(SESSION_KEY, String(v));
             }
+            scheduleAutoSave();
         });
     }
+
+    // 모델명 / RPM / context-limit 자동 저장 이벤트
+    if ($modelInput.length) {
+        $modelInput.on('input', scheduleAutoSave);
+    }
+    if ($rpmLimitInput.length) {
+        $rpmLimitInput.on('input', function () {
+            const v = $(this).val();
+            if (v && Number(v) > 0) scheduleAutoSave();
+        });
+    }
+
+    // 초기 config 로드
+    loadConfig();
 });

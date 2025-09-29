@@ -11,6 +11,19 @@ from flask import Flask, render_template, request, jsonify, Response
 from dotenv import load_dotenv, set_key
 from module import srt_module
 from module.gemini_module import GeminiClient
+from module.database_module import (
+    list_presets,
+    get_preset,
+    save_preset,
+    delete_preset,
+    save_job,
+    get_job,
+    delete_job,
+    delete_old_jobs,
+    get_all_config,
+    set_configs,
+    get_config_value,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -262,7 +275,78 @@ def api_save_google_api_key():
     if not api_key:
         return jsonify({'error': 'API 키를 입력해 주세요.'}), 400
     save_api_key_to_env(api_key)
+    # config 테이블에도 반영
+    set_configs({'api_key': api_key})
     return jsonify({'status': 'saved'})
+
+# ----- Config Management (추가 설정; 프리셋과 명확히 분리) -----
+@app.route('/api/config', methods=['GET'])
+def api_get_config():
+    """추가 설정 전체 조회. api_key는 실제 값을 노출하지 않고 preview만 제공."""
+    data = get_all_config()
+    out = data.copy()
+    if 'api_key' in out and isinstance(out['api_key'], str):
+        val = out['api_key']
+        if len(val) > 8:
+            out['api_key_preview'] = val[:4] + '...' + val[-4:]
+        else:
+            out['api_key_preview'] = '***'
+        out.pop('api_key')
+    return jsonify(out)
+
+@app.route('/api/config', methods=['POST'])
+def api_update_config():
+    data = request.get_json(silent=True) or {}
+    updates = {}
+    # API Key
+    if 'api_key' in data:
+        new_key = (data.get('api_key') or '').strip()
+        if new_key:
+            save_api_key_to_env(new_key)
+            updates['api_key'] = new_key
+    # 모델명
+    if 'model_name' in data:
+        model_name = (data.get('model_name') or '').strip()
+        if model_name:
+            updates['model_name'] = model_name
+    # RPM 제한
+    if 'rpm_limit' in data:
+        raw_rl = data.get('rpm_limit')
+        try:
+            rl = int(str(raw_rl))
+            if rl > 0:
+                updates['rpm_limit'] = rl
+        except (ValueError, TypeError):
+            pass
+    # 전역 기본 thinking_budget (개별 요청은 override 가능)
+    if 'thinking_budget' in data:
+        raw_tb = data.get('thinking_budget')
+        try:
+            tb = int(str(raw_tb))
+            if tb > 0:
+                updates['thinking_budget'] = tb
+        except (ValueError, TypeError):
+            pass
+    # 컨텍스트 압축 on/off
+    if 'context_compression' in data:
+        raw = str(data.get('context_compression')).lower()
+        updates['context_compression'] = 1 if raw in {'1','true','on'} else 0
+    # 컨텍스트 토큰 제한
+    if 'context_limit' in data:
+        raw_cl = data.get('context_limit')
+        try:
+            cl = int(str(raw_cl))
+            if cl > 0:
+                updates['context_limit'] = cl
+        except (ValueError, TypeError):
+            pass
+    if not updates:
+        return jsonify({'status': 'no-op'}), 400
+    set_configs(updates)
+    safe = updates.copy()
+    if 'api_key' in safe:
+        safe['api_key'] = 'stored'
+    return jsonify({'status': 'saved', 'updated': safe})
 
 @app.route('/api/jobs', methods=['POST'])
 def api_create_job():
@@ -404,7 +488,7 @@ def upload_srt():
             model=model_name,
             api_key=api_key if api_key else None,
             thinking_budget=thinking_budget_val,
-            rpm_limit=9,
+            rpm_limit=int(get_config_value('rpm_limit', 9) or 9),
             generation_config={
                 'max_output_tokens': 122880  # 120k 토큰
             },
@@ -489,17 +573,7 @@ def parse_srt_route():
     subtitles = srt_module.parse_srt_text(content)
     return jsonify(subtitles)
 
-# ----- Preset management API -----
-from module.database_module import (
-    list_presets,
-    get_preset,
-    save_preset,
-    delete_preset,
-    save_job,
-    get_job,
-    delete_job,
-    delete_old_jobs,
-)
+# ----- Preset management API (추가 설정과 독립) -----
 
 @app.route('/api/presets', methods=['GET'])
 def api_list_presets():
@@ -510,51 +584,42 @@ def api_list_presets():
 def api_get_preset(name):
     preset = get_preset(name)
     if preset:
-        return jsonify(preset)
+        # 추가 설정(API 키, 모델, thinking_budget, context 관련 등)은 프리셋과 분리됨.
+        # 호환성 위해 DB에서 가져오더라도 번역 핵심 필드만 반환.
+        minimal = {
+            'name': preset.get('name'),
+            'target_lang': preset.get('target_lang'),
+            'batch_size': preset.get('batch_size'),
+            'custom_prompt': preset.get('custom_prompt'),
+        }
+        return jsonify(minimal)
     return jsonify({'error': 'not found'}), 404
 
 @app.route('/api/presets/<name>', methods=['POST'])
 def api_save_preset(name):
     data = request.get_json() or {}
+    # 프리셋은 아래 3개 필드만 허용. (target_lang, batch_size, custom_prompt)
+    # 그 외 필드는 무시하여 프리셋과 추가 설정이 혼동되지 않도록 함.
     target_lang = data.get('target_lang')
-    batch_size = data.get('batch_size')
+    batch_size_raw = data.get('batch_size')
     try:
-        batch_size = int(batch_size) if batch_size is not None else None
+        batch_size = int(batch_size_raw) if batch_size_raw is not None else None
     except (ValueError, TypeError):
         batch_size = None
     custom_prompt = data.get('custom_prompt')
-    thinking_budget = data.get('thinking_budget')
-    try:
-        thinking_budget = int(thinking_budget) if thinking_budget is not None else None
-    except (ValueError, TypeError):
-        thinking_budget = None
-    context_compression = data.get('context_compression')
-    if context_compression is not None:
-        try:
-            context_compression = int(context_compression)
-        except (ValueError, TypeError):
-            context_compression = 1 if str(context_compression).lower() in {'true', '1', 'on'} else 0
-    context_limit = data.get('context_limit')
-    try:
-        context_limit = int(context_limit) if context_limit is not None else None
-    except (ValueError, TypeError):
-        context_limit = None
-    api_key = data.get('api_key')
-    if isinstance(api_key, str):
-        api_key = api_key.strip() or None
-    else:
-        api_key = None
+
+    # legacy 파라미터( api_key, thinking_budget, context_* )는 저장하지 않음.
     save_preset(
         name,
         target_lang,
         batch_size,
         custom_prompt,
-        thinking_budget,
-        api_key,
-        context_compression,
-        context_limit,
+        thinking_budget=None,
+        api_key=None,
+        context_compression=None,
+        context_limit=None,
     )
-    return jsonify({'status': 'ok'})
+    return jsonify({'status': 'ok', 'stored_fields': ['target_lang', 'batch_size', 'custom_prompt']})
 
 @app.route('/api/presets/<name>', methods=['DELETE'])
 def api_delete_preset(name):
