@@ -95,6 +95,9 @@ class GeminiClient:
             # 대화 히스토리 초기화
             self.history: List[Dict[str, Any]] = []
             self._token_usage_total: int = 0
+            # 재구성된 자막 블록 (이전 방식: 요약 시 결합). 현재 스냅샷 통합 이후 더 이상 사용하지 않지만
+            # 하위 호환 목적/잠재적 복구를 위해 필드를 남겨둠.
+            self._reconstructed_block: Optional[str] = None
 
             # 컨텍스트 압축 설정
             self.context_compression_enabled = bool(context_compression_enabled)
@@ -115,7 +118,7 @@ class GeminiClient:
             # 생성 설정 초기화
             default_generation_config = {
                 'temperature': 0.7,
-                'max_output_tokens': 1048576,
+                'max_output_tokens': 65536,
                 'top_p': 0.9,
                 'top_k': 40,
                 'safety_settings': safety_settings,
@@ -308,6 +311,11 @@ class GeminiClient:
         if not summary_text:
             return False
 
+        # 재구성된 자막 블록이 있으면 summary 뒤에 결합
+        # 개별 엔트리 모드가 아닌 경우에만 블록 결합
+        if self._reconstructed_block:
+            summary_text = f"{summary_text}\n\n{self._reconstructed_block}".rstrip()
+
         summary_message = {
             'role': 'model',
             'parts': [{'text': f"{self._context_summary_prefix}\n{summary_text}"}]
@@ -371,11 +379,8 @@ class GeminiClient:
                 if k not in {'response_schema', 'response_mime_type'}
             }
             compression_config['temperature'] = 0.3
-            try:
-                max_tokens = int(self.generation_config.get('max_output_tokens', 4096))
-            except (TypeError, ValueError):
-                max_tokens = 4096
-            compression_config['max_output_tokens'] = min(2048, max_tokens)
+            max_tokens = int(self.generation_config.get('max_output_tokens', 65536))
+            compression_config['max_output_tokens'] = max_tokens
             config_payload = cast(types.GenerateContentConfigDict, compression_config)
             response = self.client.models.generate_content(
                 model=self.model,
@@ -514,11 +519,10 @@ class GeminiClient:
             history_tokens = self._estimate_history_tokens()
             token_limit = self.context_limit_tokens or '∞'
             logger.info(
-                "메시지 전송 완료. 히스토리 길이: %s, 요청 토큰: %s, 응답 추정 토큰: %s, 누적 추정 토큰: %s, 히스토리 추정 토큰: %s/%s",
+                "메시지 전송 완료. 히스토리 길이: %s, 요청 토큰: %s, 응답 추정 토큰: %s, 히스토리 추정 토큰: %s/%s",
                 len(self.history),
                 prompt_tokens_estimate,
                 model_tokens_estimate,
-                self._token_usage_total,
                 history_tokens,
                 token_limit,
             )
@@ -590,13 +594,14 @@ class GeminiClient:
             
             # 스트리밍 응답 수집
             full_response_text = []
+            full_response_combined = ""  # 초기화
             for chunk in stream:
                 if chunk.text:
                     full_response_text.append(chunk.text)
+                    full_response_combined += chunk.text  # 실시간 업데이트
                     yield chunk.text
             
             # 전체 응답을 히스토리에 추가
-            full_response_combined = ''.join(full_response_text)
             model_response = {
                 'role': 'model',
                 'parts': [{'text': full_response_combined}]
@@ -609,11 +614,10 @@ class GeminiClient:
             history_tokens = self._estimate_history_tokens()
             token_limit = self.context_limit_tokens or '∞'
             logger.info(
-                "스트리밍 메시지 전송 완료. 히스토리 길이: %s, 요청 토큰: %s, 응답 추정 토큰: %s, 누적 추정 토큰: %s, 히스토리 추정 토큰: %s/%s",
+                "스트리밍 메시지 전송 완료. 히스토리 길이: %s, 요청 토큰: %s, 응답 추정 토큰: %s, 히스토리 추정 토큰: %s/%s",
                 len(self.history),
                 prompt_tokens_estimate,
                 model_tokens_estimate,
-                self._token_usage_total,
                 history_tokens,
                 token_limit,
             )
@@ -627,6 +631,8 @@ class GeminiClient:
             # 오류 발생 시 추가한 사용자 메시지 롤백
             self.history.pop()
             logger.error(f"스트리밍 중 오류: {e}")
+            if full_response_combined.strip():
+                logger.error(f"스트리밍 중 오류 발생 시점까지 받은 응답: {full_response_combined}")
             raise
 
     def delete_last_turn(self) -> bool:
@@ -696,6 +702,107 @@ class GeminiClient:
     def get_history(self) -> List[Dict[str, Any]]:
         """현재 대화 히스토리를 반환합니다."""
         return self.history.copy()
+
+    # ------------------ 재구성 자막 통합 관련 공개 메서드 ------------------
+    def set_reconstructed_subtitles(self, subtitles: List[Dict[str, Any]], translations: Dict[int, str], keep_recent_entries: int = 100, as_individual_messages: bool = True):
+        """(통합 스냅샷 모드)
+        메소드 이름은 유지하되 내부 동작은 '히스토리를 summary + 재구성 엔트리 두 메시지'로
+        완전히 재설정하는 스냅샷 방식으로 통합되었습니다.
+
+        이전 버전(as_individual_messages=True)이 '현재 히스토리에 단일 [RECON_ENTRIES] 메시지만 추가'하던
+        방식은 더 이상 사용되지 않으며, now: 항상 전체 히스토리를 재구성합니다.
+
+        Args:
+            subtitles: 전체(또는 처리된 범위) 자막 리스트 (index, text 필드 포함)
+            translations: index -> 번역 문자열 매핑
+            keep_recent_entries: 재구성 메시지에 포함할 최신 엔트리 수
+            as_individual_messages: (이제 무시됨) 역호환 파라미터
+        """
+        keep_recent_entries = max(0, int(keep_recent_entries))
+        try:
+            # 번역 성공한 항목만 추출
+            enriched: List[Dict[str, Any]] = []
+            if subtitles and translations:
+                for sub in subtitles:
+                    idx = sub.get('index')
+                    if idx in translations:
+                        enriched.append({
+                            'index': idx,
+                            'original': (sub.get('text') or '')[:1000],
+                            'translated': (translations[idx] or '')[:1200]
+                        })
+
+            # 요약 입력 메시지 구성 (최대 400개 엔트리)
+            temp_messages: List[Dict[str, Any]] = []
+            if enriched:
+                for item in enriched[-min(len(enriched), 400):]:
+                    temp_messages.append({
+                        'role': 'user',
+                        'parts': [{
+                            'text': f"#{item['index']} 원문: {item['original']}\n번역: {item['translated']}"
+                        }]
+                    })
+
+            # 요약 생성
+            summary_text = None
+            if temp_messages:
+                summary_text = self._summarize_messages(temp_messages)
+            if not summary_text:
+                summary_text = (
+                    "스타일: 없음\n용어: 없음\n결정 사항: 없음\n주의/금지: 없음\n"  # 기본 골격
+                )
+
+            # 재구성 메시지 구축
+            if enriched:
+                recent = enriched[-keep_recent_entries:] if keep_recent_entries else []
+                recon_lines: List[str] = [
+                    '[RECON_ENTRIES]',
+                    f"총 {len(enriched)}개 중 최신 {len(recent)}개"
+                ]
+                for item in recent:
+                    o = item['original'].replace('\n', ' ').strip()
+                    t = item['translated'].replace('\n', ' ').strip()
+                    if len(o) > 300:
+                        o = o[:297].rstrip() + '...'
+                    if len(t) > 400:
+                        t = t[:397].rstrip() + '...'
+                    recon_lines.append(f"#${item['index']}\nORIG: {o}\nTRANS: {t}")
+                recon_msg_text = '\n'.join(recon_lines)
+            else:
+                recon_msg_text = '[RECON_ENTRIES]\n번역된 자막이 아직 없습니다.'
+
+            # 히스토리 재설정 (summary + recon)
+            self.history = [
+                {
+                    'role': 'model',
+                    'parts': [{'text': f"{self._context_summary_prefix}\n{summary_text}"}]
+                },
+                {
+                    'role': 'model',
+                    'parts': [{'text': recon_msg_text}]
+                }
+            ]
+            # 더 이상 블록 결합 방식 사용하지 않지만 변수는 호환성 위해 유지
+            self._reconstructed_block = None
+            self._token_usage_total = self._estimate_history_tokens()
+            logger.info(
+                "히스토리 스냅샷 재구성(set_reconstructed_subtitles): summary + recon (%s개 번역, keep_recent=%s)",
+                len(enriched),
+                keep_recent_entries,
+            )
+        except Exception as exc:
+            logger.error("set_reconstructed_subtitles 스냅샷 재구성 실패: %s", exc)
+
+    def _is_reconstructed_message(self, message: Dict[str, Any]) -> bool:
+        if message.get('role') != 'model':
+            return False
+        parts = message.get('parts') or []
+        for part in parts:
+            txt = (part.get('text') or '')
+            if txt.startswith('[RECON_ENTRY #') or txt.startswith('[RECON_ENTRIES]'):
+                return True
+        return False
+
 
     def get_config(self) -> Dict[str, Any]:
         """현재 설정을 반환합니다."""
