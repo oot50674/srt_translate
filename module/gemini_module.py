@@ -28,7 +28,7 @@ class GeminiClient:
                  response_mime_type: Optional[str] = None,
                  context_compression_enabled: bool = False,
                  context_limit_tokens: Optional[int] = None,
-                 context_keep_recent: int = 2,
+                 context_keep_recent: int = 1,
                  **kwargs):
         """
         대화형 GeminiClient를 초기화합니다.

@@ -11,7 +11,6 @@ from flask import Flask, render_template, request, jsonify, Response
 from dotenv import load_dotenv, set_key
 from module import srt_module
 from module.gemini_module import GeminiClient
-from werkzeug.datastructures import MultiDict
 from module.database_module import (
     list_presets,
     get_preset,
@@ -354,18 +353,6 @@ def api_create_job():
     """업로드된 SRT 데이터와 옵션을 임시로 저장하고 작업 ID를 반환합니다."""
     # 새로운 작업을 추가하기 전에 오래된 작업(30일 경과)을 정리합니다.
     delete_old_jobs()
-    
-    logger.info("API Jobs 요청 폼 데이터(원본 보존, srt_text는 로그에만 잘라서 표시): %s", dict(request.form))
-    try:
-        srt_text = request.form.get('srt_text', '')
-        # 로그용 스냅샷을 만들어 srt_text만 잘라서 보여주되, 실제 request.form은 변경하지 않음
-        form_snapshot = dict(request.form)
-        if isinstance(srt_text, str) and len(srt_text) > 200:
-            form_snapshot['srt_text'] = srt_text[:200] + '...'
-            logger.info("srt_text가 200자로 잘라져 로그에만 반영됩니다.")
-        logger.info("API Jobs 요청 폼 데이터(로그용 스냅샷): %s", form_snapshot)
-    except Exception as e:
-        logger.exception("srt_text 자르기 중 오류: %s", e)
     
     files_data = []
     for f in request.files.getlist('srt_files'):
