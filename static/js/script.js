@@ -451,6 +451,21 @@ $(function () {
         if ($targetLangInput.length) $targetLangInput.val(p.target_lang || '');
         if ($chunkSizeInput.length) $chunkSizeInput.val(p.batch_size || '');
         if ($customPromptInput.length) $customPromptInput.val(p.custom_prompt || '');
+        // thinking_budget 프리셋 적용 (checkbox + input 연계)
+        if ($thinkingBudgetInput.length && $disableThinkingCheckbox.length) {
+            if (p.hasOwnProperty('thinking_budget') && p.thinking_budget !== null && p.thinking_budget !== undefined) {
+                const tb = parseInt(p.thinking_budget, 10);
+                if (!isNaN(tb)) {
+                    if (tb === 0) {
+                        $disableThinkingCheckbox.prop('checked', true).trigger('change');
+                        $thinkingBudgetInput.val('');
+                    } else {
+                        $disableThinkingCheckbox.prop('checked', false).trigger('change');
+                        $thinkingBudgetInput.val(String(tb));
+                    }
+                }
+            }
+        }
     }
 
     if ($presetSelect.length) {
@@ -475,7 +490,8 @@ $(function () {
             const preset = {
                 target_lang: $targetLangInput.val() || '',
                 batch_size: $chunkSizeInput.val() || '',
-                custom_prompt: $customPromptInput.val() || ''
+                custom_prompt: $customPromptInput.val() || '',
+                thinking_budget: $disableThinkingCheckbox.is(':checked') ? 0 : ($thinkingBudgetInput.val() || '')
                 // NOTE: 추가 설정 필드는 절대 프리셋에 포함하지 않습니다.
             };
 
@@ -514,7 +530,8 @@ $(function () {
             const preset = {
                 target_lang: $targetLangInput.val() || '',
                 batch_size: $chunkSizeInput.val() || '',
-                custom_prompt: $customPromptInput.val() || ''
+                custom_prompt: $customPromptInput.val() || '',
+                thinking_budget: $disableThinkingCheckbox.is(':checked') ? 0 : ($thinkingBudgetInput.val() || '')
                 // 추가 설정 필드 제외
             };
                 try {
@@ -582,11 +599,21 @@ $(function () {
     if ($disableThinkingCheckbox.length && $thinkingBudgetInput.length) {
         $disableThinkingCheckbox.on('change', function() {
             const isDisabled = $(this).is(':checked');
-            $thinkingBudgetInput.prop('disabled', isDisabled);
             if (isDisabled) {
-                $thinkingBudgetInput.addClass('opacity-50 bg-slate-100');
+                // 비활성화 직전의 값을 data에 저장하고 입력을 비우기
+                const cur = $thinkingBudgetInput.val();
+                if (cur !== null && String(cur).trim() !== '') {
+                    $thinkingBudgetInput.data('prev-thinking', cur);
+                }
+                $thinkingBudgetInput.prop('disabled', true).val('').addClass('opacity-50 bg-slate-100');
             } else {
-                $thinkingBudgetInput.removeClass('opacity-50 bg-slate-100');
+                // 활성화 시 이전 값을 복원(없으면 빈값)
+                const prev = $thinkingBudgetInput.data('prev-thinking');
+                if (prev !== undefined && prev !== null) {
+                    $thinkingBudgetInput.val(String(prev));
+                    $thinkingBudgetInput.removeData('prev-thinking');
+                }
+                $thinkingBudgetInput.prop('disabled', false).removeClass('opacity-50 bg-slate-100');
             }
         });
     }

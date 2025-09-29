@@ -11,6 +11,7 @@ from flask import Flask, render_template, request, jsonify, Response
 from dotenv import load_dotenv, set_key
 from module import srt_module
 from module.gemini_module import GeminiClient
+from werkzeug.datastructures import MultiDict
 from module.database_module import (
     list_presets,
     get_preset,
@@ -354,7 +355,17 @@ def api_create_job():
     # 새로운 작업을 추가하기 전에 오래된 작업(30일 경과)을 정리합니다.
     delete_old_jobs()
     
-    logger.info("API Jobs 요청 폼 데이터: %s", dict(request.form))
+    logger.info("API Jobs 요청 폼 데이터(원본 보존, srt_text는 로그에만 잘라서 표시): %s", dict(request.form))
+    try:
+        srt_text = request.form.get('srt_text', '')
+        # 로그용 스냅샷을 만들어 srt_text만 잘라서 보여주되, 실제 request.form은 변경하지 않음
+        form_snapshot = dict(request.form)
+        if isinstance(srt_text, str) and len(srt_text) > 200:
+            form_snapshot['srt_text'] = srt_text[:200] + '...'
+            logger.info("srt_text가 200자로 잘라져 로그에만 반영됩니다.")
+        logger.info("API Jobs 요청 폼 데이터(로그용 스냅샷): %s", form_snapshot)
+    except Exception as e:
+        logger.exception("srt_text 자르기 중 오류: %s", e)
     
     files_data = []
     for f in request.files.getlist('srt_files'):
@@ -585,21 +596,23 @@ def api_get_preset(name):
     preset = get_preset(name)
     if preset:
         # 추가 설정(API 키, 모델, thinking_budget, context 관련 등)은 프리셋과 분리됨.
-        # 호환성 위해 DB에서 가져오더라도 번역 핵심 필드만 반환.
-        minimal = {
+        # (요청에 따라 thinking_budget은 프리셋에 포함해 저장/로드 가능하도록 허용)
+        result = {
             'name': preset.get('name'),
             'target_lang': preset.get('target_lang'),
             'batch_size': preset.get('batch_size'),
             'custom_prompt': preset.get('custom_prompt'),
+            'thinking_budget': preset.get('thinking_budget'),  # 0 또는 None 가능
         }
-        return jsonify(minimal)
+        return jsonify(result)
     return jsonify({'error': 'not found'}), 404
 
 @app.route('/api/presets/<name>', methods=['POST'])
 def api_save_preset(name):
     data = request.get_json() or {}
-    # 프리셋은 아래 3개 필드만 허용. (target_lang, batch_size, custom_prompt)
-    # 그 외 필드는 무시하여 프리셋과 추가 설정이 혼동되지 않도록 함.
+    # 프리셋은 번역 기본 파라미터를 저장합니다.
+    # (target_lang, batch_size, custom_prompt, thinking_budget)
+    # thinking_budget은 요청에 따라 프리셋 단위 저장을 허용 (글로벌 기본값과 별개로 오버라이드 용도)
     target_lang = data.get('target_lang')
     batch_size_raw = data.get('batch_size')
     try:
@@ -607,19 +620,30 @@ def api_save_preset(name):
     except (ValueError, TypeError):
         batch_size = None
     custom_prompt = data.get('custom_prompt')
+    # thinking_budget 처리 (0 또는 양의 정수)
+    thinking_budget_val = None
+    if 'thinking_budget' in data:
+        try:
+            tb_raw = data.get('thinking_budget')
+            if tb_raw is not None and tb_raw != '':
+                tb_int = int(tb_raw)
+                if tb_int >= 0:
+                    thinking_budget_val = tb_int
+        except (ValueError, TypeError):
+            thinking_budget_val = None
 
-    # legacy 파라미터( api_key, thinking_budget, context_* )는 저장하지 않음.
+    # legacy 파라미터( api_key, context_* )는 저장하지 않음.
     save_preset(
         name,
         target_lang,
         batch_size,
         custom_prompt,
-        thinking_budget=None,
+        thinking_budget=thinking_budget_val,
         api_key=None,
         context_compression=None,
         context_limit=None,
     )
-    return jsonify({'status': 'ok', 'stored_fields': ['target_lang', 'batch_size', 'custom_prompt']})
+    return jsonify({'status': 'ok', 'stored_fields': ['target_lang', 'batch_size', 'custom_prompt', 'thinking_budget']})
 
 @app.route('/api/presets/<name>', methods=['DELETE'])
 def api_delete_preset(name):
