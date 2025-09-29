@@ -6,7 +6,7 @@ import time
 import uuid
 from datetime import datetime
 import re
-from typing import Optional
+from typing import Optional, Dict, List, Any, Tuple
 from flask import Flask, render_template, request, jsonify, Response
 from dotenv import load_dotenv, set_key
 from module import srt_module
@@ -36,7 +36,7 @@ ENV_PATH = os.path.join(BASE_DIR, '.env')
 load_dotenv(dotenv_path=ENV_PATH, override=False)
 
 DEFAULT_MODEL = "gemini-2.5-flash"
-DEFAULT_CONTEXT_KEEP_RECENT = 2  # 압축 후 유지할 최신 턴 수
+DEFAULT_CONTEXT_KEEP_RECENT = 100  # 히스토리 재구성 시 유지할 최근 자막 엔트리 수
 HISTORY_LOG_DIR = os.path.join(BASE_DIR, 'logs')
 
 # 업로드된 파일과 옵션을 임시로 보관하는 작업 저장소 (DB로 대체됨)
@@ -81,6 +81,156 @@ def save_history_log(client: GeminiClient, job_id: Optional[str] = None) -> None
     except Exception as exc:
         logger.error("대화 히스토리 로그 저장 실패: %s", exc)
 
+
+def _truncate_for_context(text: str, max_length: int = 400) -> str:
+    """재구성 히스토리에 포함될 텍스트를 간결하게 만듭니다."""
+    if not text:
+        return ''
+    collapsed = re.sub(r'\s+', ' ', text).strip()
+    if len(collapsed) <= max_length:
+        return collapsed
+    return collapsed[:max_length].rstrip() + '...'
+
+
+def _clone_history_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """start_chat 호출용 히스토리 메시지를 복사합니다."""
+    cloned: List[Dict[str, Any]] = []
+    for message in messages:
+        parts = [{'text': part.get('text', '')} for part in (message.get('parts') or [])]
+        cloned.append({'role': message.get('role', 'model'), 'parts': parts})
+    return cloned
+
+
+def _find_context_summary_message(client: GeminiClient) -> Optional[Dict[str, Any]]:
+    """히스토리에서 최신 [컨텍스트 요약] 메시지를 찾아 복사합니다."""
+    prefix = getattr(client, '_context_summary_prefix', None)
+    if not prefix:
+        return None
+    try:
+        history = client.get_history()
+    except Exception:
+        history = []
+
+    for message in reversed(history):
+        if message.get('role') != 'model':
+            continue
+        parts = message.get('parts') or []
+        for part in parts:
+            text = (part.get('text') or '').strip()
+            if text.startswith(prefix):
+                return _clone_history_messages([message])[0]
+    return None
+
+
+def _build_reconstructed_summary(entries: List[Dict[str, Any]], total_count: int) -> str:
+    """토큰 제한에 걸릴 때 사용할 요약 텍스트를 생성합니다."""
+    lines = ["[RECONSTRUCTED SUBTITLES]"]
+    if not entries:
+        lines.append("이전에 처리된 자막이 없거나 요약할 수 없습니다.")
+        return "\n".join(lines)
+
+    lines.append(f"최근 {len(entries)}개의 자막 번역 요약")
+    if total_count > len(entries):
+        lines.append(f"(총 {total_count}개 중 최신 {len(entries)}개)")
+
+    for item in entries:
+        index = item.get('index')
+        translated = _truncate_for_context(item.get('translated', ''), 160)
+        lines.append(f"#{index}: {translated}")
+
+    return "\n".join(lines)
+
+
+def _prepare_reconstructed_history(
+    client: GeminiClient,
+    processed_subtitles: List[Dict[str, Any]],
+    translations: Dict[int, str],
+    keep_recent_entries: int,
+    upcoming_prompt: str,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """최근 처리된 자막을 기반으로 Gemini 히스토리를 재구성합니다."""
+    metadata = {
+        'total_entries': 0,
+        'recent_entries': 0,
+        'history_tokens': 0,
+        'mode': 'empty',
+        'keep_requested': keep_recent_entries,
+    }
+
+    if keep_recent_entries <= 0 or not processed_subtitles or not translations:
+        return [], metadata
+
+    reconstructed: List[Dict[str, Any]] = []
+    for subtitle in processed_subtitles:
+        translated = translations.get(subtitle.get('index')) # pyright: ignore[reportArgumentType]
+        if translated is None:
+            continue
+        reconstructed.append({
+            'index': subtitle.get('index'),
+            'start': subtitle.get('start'),
+            'end': subtitle.get('end'),
+            'original': _truncate_for_context(subtitle.get('text', '')),
+            'translated': _truncate_for_context(translated),
+        })
+
+    if not reconstructed:
+        return [], metadata
+
+    total_count = len(reconstructed)
+    recent_entries = reconstructed[-keep_recent_entries:]
+    trimmed_count = total_count - len(recent_entries)
+
+    payload = json.dumps(recent_entries, ensure_ascii=False, separators=(',', ':'))
+    header_lines = ["[RECONSTRUCTED SUBTITLES]"]
+    if trimmed_count > 0:
+        header_lines.append(
+            f"총 {total_count}개 중 최신 {len(recent_entries)}개 자막만 유지합니다."
+        )
+    else:
+        header_lines.append(f"최근 {len(recent_entries)}개의 자막 번역 기록입니다.")
+
+    history_text = "\n".join(header_lines) + "\n" + payload
+
+    estimate_tokens = getattr(client, '_estimate_text_tokens')
+    context_limit = getattr(client, 'context_limit_tokens', None)
+    mode = 'full'
+    if context_limit:
+        history_tokens = estimate_tokens(history_text)
+        prompt_tokens = estimate_tokens(upcoming_prompt)
+        safety_buffer = 256
+        if history_tokens + prompt_tokens + safety_buffer > context_limit:
+            history_text = _build_reconstructed_summary(recent_entries, total_count)
+            history_tokens = estimate_tokens(history_text)
+            mode = 'summary'
+            if history_tokens + prompt_tokens + safety_buffer > context_limit:
+                history_text = (
+                    "[RECONSTRUCTED SUBTITLES]\n"
+                    "최근 자막 기록이 길어 요약이 필요합니다. 이전 배치들의 번역 맥락은 유지되었다고 가정하고 일관성을 유지해 주세요."
+                )
+                history_tokens = estimate_tokens(history_text)
+                mode = 'fallback'
+    else:
+        history_tokens = estimate_tokens(history_text)
+
+    logger.debug(
+        "재구성 히스토리 준비: total=%s, recent=%s, keep_recent=%s",
+        len(reconstructed),
+        len(recent_entries),
+        keep_recent_entries,
+    )
+
+    metadata.update({
+        'total_entries': total_count,
+        'recent_entries': len(recent_entries),
+        'history_tokens': history_tokens,
+        'mode': mode,
+    })
+
+    return [{
+        'role': 'model',
+        'parts': [{'text': history_text}]
+    }], metadata
+
 def translate_srt_stream(content: str, client, target_lang: str = '한국어', batch_size: int = 10, user_prompt: str = '', thinking_budget: int = 8192, stop_flag = None):
     """SRT 텍스트를 번역하며 진행 상황을 스트림으로 제공합니다."""
     logger.info("translate_srt_stream 호출됨 - 파라미터: target_lang=%s, batch_size=%s, thinking_budget=%s",
@@ -124,6 +274,8 @@ def translate_srt_stream(content: str, client, target_lang: str = '한국어', b
 
     yield json.dumps({'count': len(subtitles)}) + "\n"
 
+    processed_translations: Dict[int, str] = {}
+
     for i in range(0, len(subtitles), batch_size):
         # 중단 플래그 확인
         if stop_flag and stop_flag.get('stopped', False):
@@ -135,7 +287,7 @@ def translate_srt_stream(content: str, client, target_lang: str = '한국어', b
 
         batch_items = []
         for sub in batch:
-            escaped_text = sub["text"].replace('"', '\\"').replace('\n', '\\n').replace('\r', '')
+            escaped_text = sub["text"].replace('"', '\"').replace('\n', '\n').replace('\r', '')
             batch_items.append(json.dumps({"index": sub["index"], "text": escaped_text}))
 
         batch_json = '[' + ', '.join(batch_items) + ']'
@@ -152,9 +304,104 @@ def translate_srt_stream(content: str, client, target_lang: str = '한국어', b
 - 응답은 JSON 스키마에 정의된 형식을 정확히 따르세요
 """
 
+        already_processed = subtitles[:i]
+        keep_recent_entries = max(
+            0,
+            int(getattr(client, 'context_keep_recent', DEFAULT_CONTEXT_KEEP_RECENT) or 0)
+        )
+
+        estimator = getattr(client, '_estimate_text_tokens', None)
+        history_estimator = getattr(client, '_estimate_history_tokens', None)
+        compression_enabled = bool(getattr(client, 'context_compression_enabled', False))
+        upcoming_prompt_tokens = estimator(prompt) if estimator else len(prompt)
+        existing_history_tokens = history_estimator() if history_estimator else 0
+        context_limit_tokens = getattr(client, 'context_limit_tokens', None)
+        safety_margin = max(512, int(context_limit_tokens * 0.1)) if context_limit_tokens else 0
+        threshold_for_reconstruction = (
+            max(0, (context_limit_tokens or 0) - safety_margin)
+        ) if context_limit_tokens else None
+
+        should_reconstruct = (
+            context_limit_tokens is not None
+            and keep_recent_entries > 0
+            and already_processed
+            and processed_translations
+            and compression_enabled
+            and (existing_history_tokens + upcoming_prompt_tokens >= (threshold_for_reconstruction or 0))
+        )
+
+        base_history: List[Dict[str, Any]] = []
+        reconstruction_meta: Optional[Dict[str, Any]] = None
+        summary_message: Optional[Dict[str, Any]] = None
+
+        if should_reconstruct:
+            compress_direct = getattr(client, '_compress_history_once', None)
+            if callable(compress_direct):
+                try:
+                    compress_direct(0)
+                except Exception as exc:
+                    logger.warning("컨텍스트 요약 생성 실패: %s", exc)
+
+            summary_message = _find_context_summary_message(client)
+            if summary_message:
+                logger.info("컨텍스트 요약 메시지가 재구성에 포함됩니다.")
+            else:
+                logger.warning("컨텍스트 요약 메시지를 찾지 못했습니다. 재구성 메시지만 사용합니다.")
+
+            safety_margin = max(512, int(context_limit_tokens * 0.1)) if context_limit_tokens else 512
+            threshold = max(0, (context_limit_tokens or 0) - safety_margin)
+            candidate_keep = keep_recent_entries
+
+            while candidate_keep >= 0:
+                candidate_history, candidate_meta = _prepare_reconstructed_history(
+                    client=client,
+                    processed_subtitles=already_processed, # pyright: ignore[reportArgumentType]
+                    translations=processed_translations,
+                    keep_recent_entries=candidate_keep,
+                    upcoming_prompt=prompt,
+                )
+
+                if not candidate_history:
+                    if candidate_keep == 0:
+                        break
+                    candidate_keep -= 1
+                    continue
+
+                projected_tokens = candidate_meta['history_tokens'] + upcoming_prompt_tokens
+                if context_limit_tokens is None or projected_tokens <= threshold or candidate_keep == 0:
+                    base_history = candidate_history
+                    reconstruction_meta = candidate_meta
+                    if context_limit_tokens and projected_tokens > context_limit_tokens:
+                        logger.warning(
+                            "재구성 후에도 추정 토큰(%s)이 제한(%s)을 초과할 수 있습니다. batch_size를 줄이는 것을 고려하세요.",
+                            projected_tokens,
+                            context_limit_tokens,
+                        )
+                    break
+
+                candidate_keep -= 1
+
+            if base_history and reconstruction_meta:
+                constructed_history: List[Dict[str, Any]] = []
+                if summary_message:
+                    constructed_history.append(summary_message)
+                constructed_history.extend(base_history)
+                base_history = constructed_history
+                logger.info(
+                    "재구성 히스토리 적용: 총 %s개 중 최근 %s개 유지, 재구성 토큰 %s, 모드=%s",
+                    reconstruction_meta['total_entries'],
+                    reconstruction_meta['recent_entries'],
+                    reconstruction_meta['history_tokens'],
+                    reconstruction_meta['mode'],
+                )
+            elif summary_message:
+                base_history = [summary_message]
+                logger.info("재구성 메시지 없이 컨텍스트 요약만 유지합니다.")
+
         retry_count = 0
         max_retries = 5
         batch_success = False
+        confirmed_translations: Dict[int, str] = {}
 
         while retry_count < max_retries and not batch_success:
             # 중단 플래그 확인
@@ -162,10 +409,17 @@ def translate_srt_stream(content: str, client, target_lang: str = '한국어', b
                 logger.info("중단 플래그가 설정되어 번역을 중지합니다.")
                 return
                 
+            if base_history:
+                client.start_chat(
+                    history=_clone_history_messages(base_history),
+                    suppress_log=True,
+                    reset_usage=False,
+                )
+                
             try:
                 buffer = ""
                 processed_indices = set()
-                full_response = ""  # AI의 원본 응답을 저장할 변수
+                batch_translations: Dict[int, str] = {}
 
                 # response_schema를 사용하여 스트리밍 요청
                 for chunk in client.send_message_stream(prompt, response_schema=response_schema):
@@ -175,7 +429,6 @@ def translate_srt_stream(content: str, client, target_lang: str = '한국어', b
                         return
                         
                     buffer += chunk
-                    full_response += chunk  # 응답 전체를 누적
                     
                     # translations 배열 내의 개별 객체들을 실시간으로 파싱
                     while True:
@@ -221,6 +474,7 @@ def translate_srt_stream(content: str, client, target_lang: str = '한국어', b
                                 }
                                 yield json.dumps(result, ensure_ascii=False) + "\n"
                                 processed_indices.add(item_index)
+                                batch_translations[item_index] = result['translated']
                             
                             buffer = buffer[object_end + 1:]
 
@@ -228,6 +482,7 @@ def translate_srt_stream(content: str, client, target_lang: str = '한국어', b
                             break
                 
                 if len(processed_indices) == len(batch):
+                    confirmed_translations = dict(batch_translations)
                     batch_success = True
                 else:
                     raise ValueError("스트림 처리 중 일부 자막이 누락되었습니다.")
@@ -243,6 +498,7 @@ def translate_srt_stream(content: str, client, target_lang: str = '한국어', b
                     time.sleep(10) 
                 else:
                     error_message = f"배치 처리 실패 (재시도 {max_retries}회 초과): {e}"
+                    confirmed_translations.update(batch_translations)
                     unprocessed_indices = set(original_sub_map.keys()) - processed_indices
                     for index in unprocessed_indices:
                         sub = original_sub_map[index]
@@ -255,8 +511,12 @@ def translate_srt_stream(content: str, client, target_lang: str = '한국어', b
                             'error': True
                         }
                         yield json.dumps(error_result, ensure_ascii=False) + "\n"
+                        confirmed_translations[index] = error_result['translated']
                     logger.error(error_message)
                     batch_success = True
+
+        if confirmed_translations:
+            processed_translations.update(confirmed_translations)
 
 @app.route('/')
 def index():

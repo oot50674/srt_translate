@@ -28,7 +28,7 @@ class GeminiClient:
                  response_mime_type: Optional[str] = None,
                  context_compression_enabled: bool = False,
                  context_limit_tokens: Optional[int] = None,
-                 context_keep_recent: int = 1,
+                 context_keep_recent: int = 100,
                  **kwargs):
         """
         대화형 GeminiClient를 초기화합니다.
@@ -44,7 +44,7 @@ class GeminiClient:
             response_mime_type (str, optional): 응답 MIME 타입 (기본값: response_schema 사용시 "application/json").
             context_compression_enabled (bool): 컨텍스트 압축 사용 여부.
             context_limit_tokens (int, optional): 히스토리 토큰 제한 (추정치 기반).
-            context_keep_recent (int): 압축 시 유지할 최신 턴 수.
+            context_keep_recent (int): 압축 시 유지할 최신 턴 수 (자막 재구성 시 최근 엔트리 수도 지정).
             **kwargs: 추가 설정 옵션들.
         
         Raises:
@@ -94,6 +94,7 @@ class GeminiClient:
             
             # 대화 히스토리 초기화
             self.history: List[Dict[str, Any]] = []
+            self._token_usage_total: int = 0
 
             # 컨텍스트 압축 설정
             self.context_compression_enabled = bool(context_compression_enabled)
@@ -312,10 +313,19 @@ class GeminiClient:
             'parts': [{'text': f"{self._context_summary_prefix}\n{summary_text}"}]
         }
 
+        before_tokens = self._estimate_history_tokens()
         new_history: List[Dict[str, Any]] = [summary_message]
         new_history.extend(preserved_history)
         self.history = new_history
-        logger.info("대화 히스토리가 요약되어 압축되었습니다. 현재 메시지 수: %s", len(self.history))
+        after_tokens = self._estimate_history_tokens()
+        logger.info(
+            "컨텍스트 압축 실행: 메시지 %s→%s, 토큰 %s→%s (keep_recent_turns=%s)",
+            len(compress_candidates) + len(preserved_history),
+            len(self.history),
+            before_tokens,
+            after_tokens,
+            keep_turns,
+        )
         return True
 
     def _summarize_messages(self, messages: List[Dict[str, Any]]) -> Optional[str]:
@@ -418,15 +428,26 @@ class GeminiClient:
             'time_until_reset': max(0, time_until_reset)
         }
 
-    def start_chat(self, history: Optional[List[Dict[str, Any]]] = None):
+    def start_chat(
+        self,
+        history: Optional[List[Dict[str, Any]]] = None,
+        *,
+        suppress_log: bool = False,
+        reset_usage: bool = True,
+    ):
         """
         새 대화를 시작하거나 기존 히스토리로 초기화합니다.
-        
+
         Args:
             history (list, optional): 기존 대화 히스토리. None이면 빈 히스토리로 시작.
+            suppress_log (bool): 로그 출력을 억제할지 여부.
+            reset_usage (bool): 누적 토큰 추정치를 초기화할지 여부.
         """
         self.history = history if history is not None else []
-        logger.info(f"새 대화가 시작되었습니다. 히스토리 길이: {len(self.history)}")
+        if reset_usage:
+            self._token_usage_total = self._estimate_history_tokens()
+        if not suppress_log:
+            logger.info(f"새 대화가 시작되었습니다. 히스토리 길이: {len(self.history)}")
 
     def send_message(self, message: str, model: Optional[str] = None, 
                     response_schema: Optional[Dict] = None,
@@ -450,14 +471,16 @@ class GeminiClient:
         # 컨텍스트 압축 사전 처리 및 RPM 확인
         self._prepare_history_for_new_message(message)
         self._check_rpm_limit()
-        
+
         # 사용자 메시지를 히스토리에 추가
         user_message = {
             'role': 'user',
             'parts': [{'text': message}]
         }
         self.history.append(user_message)
-        
+
+        prompt_tokens_estimate = self._estimate_history_tokens()
+
         try:
             # 이번 요청을 위한 설정 준비
             request_config = self.generation_config.copy()
@@ -486,7 +509,19 @@ class GeminiClient:
             }
             self.history.append(model_response)
             
-            logger.info(f"메시지 전송 완료. 현재 히스토리 길이: {len(self.history)}")
+            model_tokens_estimate = self._estimate_text_tokens(response.text or '')
+            self._token_usage_total += prompt_tokens_estimate + model_tokens_estimate
+            history_tokens = self._estimate_history_tokens()
+            token_limit = self.context_limit_tokens or '∞'
+            logger.info(
+                "메시지 전송 완료. 히스토리 길이: %s, 요청 토큰: %s, 응답 추정 토큰: %s, 누적 추정 토큰: %s, 히스토리 추정 토큰: %s/%s",
+                len(self.history),
+                prompt_tokens_estimate,
+                model_tokens_estimate,
+                self._token_usage_total,
+                history_tokens,
+                token_limit,
+            )
             return response.text or ""
             
         except google_exceptions.GoogleAPICallError as e:
@@ -522,14 +557,16 @@ class GeminiClient:
         # 컨텍스트 압축 사전 처리 및 RPM 확인
         self._prepare_history_for_new_message(message)
         self._check_rpm_limit()
-        
+
         # 사용자 메시지를 히스토리에 추가
         user_message = {
             'role': 'user',
             'parts': [{'text': message}]
         }
         self.history.append(user_message)
-        
+
+        prompt_tokens_estimate = self._estimate_history_tokens()
+
         try:
             # 이번 요청을 위한 설정 준비
             request_config = self.generation_config.copy()
@@ -559,14 +596,28 @@ class GeminiClient:
                     yield chunk.text
             
             # 전체 응답을 히스토리에 추가
+            full_response_combined = ''.join(full_response_text)
             model_response = {
                 'role': 'model',
-                'parts': [{'text': ''.join(full_response_text)}]
+                'parts': [{'text': full_response_combined}]
             }
             self.history.append(model_response)
-            
-            logger.info(f"스트리밍 메시지 전송 완료. 현재 히스토리 길이: {len(self.history)}")
-            
+
+            model_tokens_estimate = self._estimate_text_tokens(full_response_combined)
+            self._token_usage_total += prompt_tokens_estimate + model_tokens_estimate
+
+            history_tokens = self._estimate_history_tokens()
+            token_limit = self.context_limit_tokens or '∞'
+            logger.info(
+                "스트리밍 메시지 전송 완료. 히스토리 길이: %s, 요청 토큰: %s, 응답 추정 토큰: %s, 누적 추정 토큰: %s, 히스토리 추정 토큰: %s/%s",
+                len(self.history),
+                prompt_tokens_estimate,
+                model_tokens_estimate,
+                self._token_usage_total,
+                history_tokens,
+                token_limit,
+            )
+
         except google_exceptions.GoogleAPICallError as e:
             # 오류 발생 시 추가한 사용자 메시지 롤백
             self.history.pop()
@@ -606,6 +657,7 @@ class GeminiClient:
         logger.info("대화를 새 클라이언트 인스턴스로 포크합니다.")
         new_client = GeminiClient(**self._init_args)
         new_client.start_chat(history=[msg.copy() for msg in self.history])  # Deep copy
+        new_client._token_usage_total = self._token_usage_total
         return new_client
 
     def modify_message(self, index: int, new_message: str) -> Optional['GeminiClient']:
