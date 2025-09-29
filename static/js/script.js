@@ -21,6 +21,8 @@ $(function () {
     const $settingsPanel = $('#settings-panel');
     const $settingsOverlay = $('#settings-overlay');
     const $settingsCloseBtn = $('#settings-close-btn');
+    const $contextCompressionCheckbox = $('#context-compression');
+    const $contextLimitInput = $('#context-limit');
     const SETTINGS_PANEL_STORAGE_KEY = 'settingsPanelOpen';
     const $missingApiKeyAlert = $('#missing-api-key-alert');
     const $panelMissingApiKeyAlert = $('#panel-missing-api-key-alert');
@@ -392,7 +394,10 @@ $(function () {
                 target_lang: $targetLangInput.val() || '',
                 batch_size: $chunkSizeInput.val() || '',
                 custom_prompt: $customPromptInput.val() || '',
-                thinking_budget: $disableThinkingCheckbox.is(':checked') ? '0' : $thinkingBudgetInput.val() || '',
+            thinking_budget: $disableThinkingCheckbox.is(':checked') ? '0' : $thinkingBudgetInput.val() || '',
+            // Context compression options (UI only, backend handling TODO)
+            context_compression: $contextCompressionCheckbox.length ? ($contextCompressionCheckbox.is(':checked') ? '1' : '0') : '0',
+            context_limit: $contextLimitInput.length ? $contextLimitInput.val() || '' : '',
                 api_key: $apiKeyInput.length ? $apiKeyInput.val() || '' : '',
                 model: $modelInput.length ? $modelInput.val().trim() : ''
             };
@@ -412,6 +417,8 @@ $(function () {
             formData.append('batch_size', options.batch_size);
             formData.append('custom_prompt', options.custom_prompt);
             formData.append('thinking_budget', options.thinking_budget);
+            formData.append('context_compression', options.context_compression);
+            formData.append('context_limit', options.context_limit);
             formData.append('api_key', options.api_key);
             formData.append('model', options.model || DEFAULT_MODEL);
 
@@ -437,6 +444,53 @@ $(function () {
                 $thinkingBudgetInput.addClass('opacity-50 bg-slate-100');
             } else {
                 $thinkingBudgetInput.removeClass('opacity-50 bg-slate-100');
+            }
+        });
+    }
+
+    // Context Compression 토글 처리: 토글이 활성화되어야 컨텍스트 제한 입력을 사용할 수 있음
+    if ($contextCompressionCheckbox.length && $contextLimitInput.length) {
+        // 초기 상태: 로컬스토리지에 저장된 값이 있으면 체크박스에 적용
+        const storedCompression = localStorage.getItem('contextCompressionEnabled');
+        if (storedCompression !== null) {
+            $contextCompressionCheckbox.prop('checked', storedCompression === 'true');
+        }
+
+        // context-limit 값은 세션 범위로 저장/복원
+        const SESSION_KEY = 'contextLimit';
+        const storedLimit = sessionStorage.getItem(SESSION_KEY);
+        if (storedLimit !== null) {
+            $contextLimitInput.val(storedLimit);
+        }
+
+        const applyContextInputState = () => {
+            const enabled = $contextCompressionCheckbox.is(':checked');
+            $contextLimitInput.prop('disabled', !enabled);
+            if (!enabled) {
+                $contextLimitInput.addClass('opacity-50 bg-slate-100');
+            } else {
+                $contextLimitInput.removeClass('opacity-50 bg-slate-100');
+            }
+        };
+
+        // 초기 적용
+        applyContextInputState();
+
+        $contextCompressionCheckbox.on('change', function () {
+            const enabled = $(this).is(':checked');
+            // UI 동작
+            applyContextInputState();
+            // 사용자 설정 로컬 저장 (백엔드 연동은 TODO)
+            localStorage.setItem('contextCompressionEnabled', enabled ? 'true' : 'false');
+        });
+
+        // context-limit 변경 시 세션에 저장
+        $contextLimitInput.on('input', function () {
+            const v = $(this).val();
+            if (v === '' || isNaN(Number(v))) {
+                sessionStorage.removeItem(SESSION_KEY);
+            } else {
+                sessionStorage.setItem(SESSION_KEY, String(v));
             }
         });
     }
