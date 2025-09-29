@@ -4,6 +4,9 @@ import tempfile
 import json
 import time
 import uuid
+from datetime import datetime
+import re
+from typing import Optional
 from flask import Flask, render_template, request, jsonify, Response
 from dotenv import load_dotenv, set_key
 from module import srt_module
@@ -20,6 +23,8 @@ ENV_PATH = os.path.join(BASE_DIR, '.env')
 load_dotenv(dotenv_path=ENV_PATH, override=False)
 
 DEFAULT_MODEL = "gemini-2.5-flash"
+DEFAULT_CONTEXT_KEEP_RECENT = 2  # 압축 후 유지할 최신 턴 수
+HISTORY_LOG_DIR = os.path.join(BASE_DIR, 'logs')
 
 # 업로드된 파일과 옵션을 임시로 보관하는 작업 저장소 (DB로 대체됨)
 # pending_jobs: dict[str, dict] = {}
@@ -38,6 +43,30 @@ def save_api_key_to_env(api_key: str) -> None:
         logger.info(".env(GOOGLE_API_KEY)에 API 키가 저장되었습니다.")
     except Exception as e:
         logger.error(".env 저장 중 오류: %s", e)
+
+
+def save_history_log(client: GeminiClient, job_id: Optional[str] = None) -> None:
+    """최종 대화 히스토리를 로그 파일로 저장합니다."""
+    try:
+        os.makedirs(HISTORY_LOG_DIR, exist_ok=True)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        job_label = (job_id or 'session').strip()
+        if job_label:
+            job_label = re.sub(r'[^A-Za-z0-9_-]+', '-', job_label)[:80] or 'session'
+        else:
+            job_label = 'session'
+        filename = f"history_{job_label}_{timestamp}.json"
+        path = os.path.join(HISTORY_LOG_DIR, filename)
+        history = client.get_history()
+        with open(path, 'w', encoding='utf-8') as fp:
+            json.dump(history, fp, ensure_ascii=False, indent=2)
+        logger.info(
+            "대화 히스토리가 로그 파일로 저장되었습니다: %s (메시지 %d개)",
+            path,
+            len(history),
+        )
+    except Exception as exc:
+        logger.error("대화 히스토리 로그 저장 실패: %s", exc)
 
 def translate_srt_stream(content: str, client, target_lang: str = '한국어', batch_size: int = 10, user_prompt: str = '', thinking_budget: int = 8192, stop_flag = None):
     """SRT 텍스트를 번역하며 진행 상황을 스트림으로 제공합니다."""
@@ -270,6 +299,13 @@ def api_create_job():
         thinking_budget = int(thinking_budget)
     except (ValueError, TypeError):
         thinking_budget = 8192
+    raw_context_compression = (request.form.get('context_compression') or '').strip()
+    context_compression = 1 if raw_context_compression in {'1', 'true', 'True', 'on'} else 0
+    context_limit = request.form.get('context_limit')
+    try:
+        context_limit = int(context_limit) if context_limit not in (None, '') else None
+    except (ValueError, TypeError):
+        context_limit = None
     api_key = (request.form.get('api_key') or '').strip()
     if api_key:
         # 사용자가 제출한 키를 즉시 .env에 저장하고 환경에 반영
@@ -281,11 +317,13 @@ def api_create_job():
         'batch_size': batch_size,
         'custom_prompt': request.form.get('custom_prompt', ''),
         'thinking_budget': thinking_budget,
+        'context_compression': context_compression,
+        'context_limit': context_limit,
         # 더 이상 DB에는 키를 저장하지 않습니다.
         'api_key': None,
         'model': model_name
     }
-    save_job(job_id, job_data)
+    save_job(job_id, job_data) # type: ignore
     return jsonify({'job_id': job_id})
 
 @app.route('/api/jobs/<job_id>', methods=['GET'])
@@ -339,6 +377,14 @@ def upload_srt():
     thinking_budget = request.form.get('thinking_budget', 8192)
     api_key = (request.form.get('api_key') or '').strip()
     model_name = (request.form.get('model') or '').strip() or DEFAULT_MODEL
+    job_id = (request.form.get('job_id') or '').strip() or None
+    raw_context_compression = (request.form.get('context_compression') or '').strip()
+    context_compression_enabled = raw_context_compression in {'1', 'true', 'True', 'on'}
+    context_limit = request.form.get('context_limit')
+    try:
+        context_limit = int(context_limit) if context_limit not in (None, '') else None
+    except (ValueError, TypeError):
+        context_limit = None
     # 사용자가 업로드 단계에서 키를 다시 보냈다면 .env에 저장/반영
     if api_key:
         save_api_key_to_env(api_key)
@@ -361,7 +407,10 @@ def upload_srt():
             rpm_limit=9,
             generation_config={
                 'max_output_tokens': 122880  # 120k 토큰
-            }
+            },
+            context_compression_enabled=context_compression_enabled,
+            context_limit_tokens=context_limit,
+            context_keep_recent=DEFAULT_CONTEXT_KEEP_RECENT,
         )
     except ValueError as exc:
         logger.error("Gemini 클라이언트 초기화 실패: %s", exc)
@@ -375,6 +424,12 @@ def upload_srt():
         logger.info("Thinking 기능 비활성화됨 (thinking_budget=0)")
     else:
         logger.info(f"Thinking Budget 설정: {thinking_budget_val}")
+    if context_compression_enabled:
+        logger.info(
+            "컨텍스트 압축 활성화. limit=%s, keep_recent=%s",
+            context_limit if context_limit is not None else '미설정',
+            DEFAULT_CONTEXT_KEEP_RECENT,
+        )
     
     shared_client.start_chat()
     logger.info("다중 파일 처리를 위한 공유 클라이언트가 생성되었습니다.")
@@ -407,6 +462,9 @@ def upload_srt():
                 # 파일 완료 신호
                 if not stop_flag['stopped']:
                     yield json.dumps({'file_completed': name}) + "\n"
+
+            if not stop_flag['stopped']:
+                save_history_log(shared_client, job_id)
         except GeneratorExit:
             logger.warning("클라이언트 연결이 중단되었습니다. 번역 작업을 중지합니다.")
             stop_flag['stopped'] = True
@@ -470,12 +528,32 @@ def api_save_preset(name):
         thinking_budget = int(thinking_budget) if thinking_budget is not None else None
     except (ValueError, TypeError):
         thinking_budget = None
+    context_compression = data.get('context_compression')
+    if context_compression is not None:
+        try:
+            context_compression = int(context_compression)
+        except (ValueError, TypeError):
+            context_compression = 1 if str(context_compression).lower() in {'true', '1', 'on'} else 0
+    context_limit = data.get('context_limit')
+    try:
+        context_limit = int(context_limit) if context_limit is not None else None
+    except (ValueError, TypeError):
+        context_limit = None
     api_key = data.get('api_key')
     if isinstance(api_key, str):
         api_key = api_key.strip() or None
     else:
         api_key = None
-    save_preset(name, target_lang, batch_size, custom_prompt, thinking_budget, api_key)
+    save_preset(
+        name,
+        target_lang,
+        batch_size,
+        custom_prompt,
+        thinking_budget,
+        api_key,
+        context_compression,
+        context_limit,
+    )
     return jsonify({'status': 'ok'})
 
 @app.route('/api/presets/<name>', methods=['DELETE'])

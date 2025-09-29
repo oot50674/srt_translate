@@ -352,6 +352,23 @@ $(function () {
                 $thinkingBudgetInput.val(thinkingBudget || '8192');
             }
         }
+
+        if ($contextCompressionCheckbox.length && $contextLimitInput.length) {
+            const compressionRaw = p.context_compression;
+            const enabled = compressionRaw === 1 || compressionRaw === '1' || String(compressionRaw).toLowerCase() === 'true';
+            const limitValue = p.context_limit ?? '';
+
+            $contextCompressionCheckbox.prop('checked', enabled);
+            if (limitValue === '' || limitValue === null) {
+                $contextLimitInput.val('');
+                sessionStorage.removeItem('contextLimit');
+            } else {
+                $contextLimitInput.val(limitValue);
+                sessionStorage.setItem('contextLimit', String(limitValue));
+            }
+            localStorage.setItem('contextCompressionEnabled', enabled ? 'true' : 'false');
+            $contextCompressionCheckbox.trigger('change');
+        }
     }
 
     if ($presetSelect.length) {
@@ -376,7 +393,9 @@ $(function () {
                 batch_size: $chunkSizeInput.val() || '',
                 custom_prompt: $customPromptInput.val() || '',
                 thinking_budget: $disableThinkingCheckbox.is(':checked') ? '0' : $thinkingBudgetInput.val() || '',
-                api_key: $apiKeyInput.length ? $apiKeyInput.val() || '' : ''
+                api_key: $apiKeyInput.length ? $apiKeyInput.val() || '' : '',
+                context_compression: $contextCompressionCheckbox.length ? ($contextCompressionCheckbox.is(':checked') ? '1' : '0') : '',
+                context_limit: $contextLimitInput.length ? $contextLimitInput.val() || '' : ''
             };
             await savePreset(name, preset);
             await populatePresetOptions();
@@ -395,7 +414,7 @@ $(function () {
                 batch_size: $chunkSizeInput.val() || '',
                 custom_prompt: $customPromptInput.val() || '',
             thinking_budget: $disableThinkingCheckbox.is(':checked') ? '0' : $thinkingBudgetInput.val() || '',
-            // Context compression options (UI only, backend handling TODO)
+            // Context compression options
             context_compression: $contextCompressionCheckbox.length ? ($contextCompressionCheckbox.is(':checked') ? '1' : '0') : '0',
             context_limit: $contextLimitInput.length ? $contextLimitInput.val() || '' : '',
                 api_key: $apiKeyInput.length ? $apiKeyInput.val() || '' : '',
@@ -480,7 +499,7 @@ $(function () {
             const enabled = $(this).is(':checked');
             // UI 동작
             applyContextInputState();
-            // 사용자 설정 로컬 저장 (백엔드 연동은 TODO)
+            // 사용자 설정 로컬 저장 (백엔드와 동기화됨)
             localStorage.setItem('contextCompressionEnabled', enabled ? 'true' : 'false');
         });
 

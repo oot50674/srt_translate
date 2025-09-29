@@ -108,6 +108,8 @@ $(async function () {
     const fileSubtitleCounts = {}; // 각 파일의 자막 개수
     const translatedSubtitlesByFile = {}; // 파일별 번역 결과 저장
     const originalSubtitlesByFile = {}; // 파일별 원본 자막 텍스트 저장
+    const processedIndicesByFile = {}; // 파일별로 수신한 자막 인덱스 추적
+    const rowElementsByFile = {}; // 파일별로 렌더링된 행을 인덱스와 매핑
 
     async function initTable(content, rowIndexOffset, fileName) {
         const res = await fetch('/parse_srt', {
@@ -133,6 +135,8 @@ $(async function () {
         fileSubtitleCounts[fileName] = subtitles.length;
         translatedSubtitlesByFile[fileName] = [];
         originalSubtitlesByFile[fileName] = subtitles; // 자막 원문 저장
+        processedIndicesByFile[fileName] = new Set();
+        rowElementsByFile[fileName] = new Map();
         
         return subtitles.length;
     }
@@ -146,36 +150,47 @@ $(async function () {
     }
 
     // 번역이 완료될 때마다 해당 자막을 즉시 테이블에 추가합니다.
-    function updateRow(item, fileName) {
+    function updateRow(item, fileName, isNewEntry) {
         // 행 생성
         const originalText = (originalSubtitlesByFile[fileName] && originalSubtitlesByFile[fileName][item.index - 1]) ? originalSubtitlesByFile[fileName][item.index - 1].text : (item.original || '');
         const originalHtml = `<div class="font-mono text-xs text-slate-500 mb-1">[${item.start}-${item.end}]</div>${originalText}`;
         const translatedHtml = item.error ?
             `<div class="font-mono text-xs text-red-500 mb-1">[${item.start}-${item.end}]</div><div class="text-red-600 font-medium">${item.translated}</div>` :
             `<div class="font-mono text-xs text-slate-500 mb-1">[${item.start}-${item.end}]</div>${item.translated}`;
+        const rowMap = rowElementsByFile[fileName] || new Map();
+        rowElementsByFile[fileName] = rowMap;
+        let tr = rowMap.get(item.index);
 
-        const tr = $(
-            '<tr class="hover:bg-slate-50 transition-colors group">' +
-                `<td class="px-4 sm:px-6 py-4 w-1/2 text-slate-700 text-sm">${originalHtml}</td>` +
-                `<td class="px-4 sm:px-6 py-4 w-1/2 text-slate-700 text-sm">${translatedHtml}</td>` +
-            '</tr>'
-        );
+        if (!tr) {
+            tr = $(
+                '<tr class="hover:bg-slate-50 transition-colors group">' +
+                    '<td class="px-4 sm:px-6 py-4 w-1/2 text-slate-700 text-sm"></td>' +
+                    '<td class="px-4 sm:px-6 py-4 w-1/2 text-slate-700 text-sm"></td>' +
+                '</tr>'
+            );
+            rowMap.set(item.index, tr);
+            // 새 항목은 정렬된 위치를 유지하기 위해 마지막에 추가 (스트림이 순차 처리 가정)
+            $tbody.append(tr);
+        }
+
+        tr.find('td').eq(0).html(originalHtml);
+        tr.find('td').eq(1).html(translatedHtml);
 
         if (item.error) {
             tr.addClass('bg-red-50');
+        } else {
+            tr.removeClass('bg-red-50');
         }
 
         // 최근 번역 행 강조 처리
-        if (lastFocusRow) {
+        if (lastFocusRow && lastFocusRow !== tr) {
             lastFocusRow.removeClass('recent-entry');
         }
         tr.addClass('recent-entry');
         lastFocusRow = tr;
 
-        $tbody.append(tr);
-
         // 스크롤 이동
-        if (!isStopped) {
+        if (!isStopped && isNewEntry) {
             tr[0].scrollIntoView({ behavior: 'auto', block: 'center', inline: 'nearest' });
         }
     }
@@ -191,6 +206,13 @@ $(async function () {
         formData.append('batch_size', progressData.batch_size);
         formData.append('custom_prompt', progressData.custom_prompt);
         formData.append('thinking_budget', progressData.thinking_budget);
+        const compressionEnabled = progressData.context_compression === 1 || progressData.context_compression === '1' || String(progressData.context_compression).toLowerCase() === 'true';
+        formData.append('context_compression', compressionEnabled ? '1' : '0');
+        if (progressData.context_limit !== undefined && progressData.context_limit !== null && progressData.context_limit !== '') {
+            formData.append('context_limit', String(progressData.context_limit));
+        } else {
+            formData.append('context_limit', '');
+        }
         formData.append('model', progressData.model || storedModelName);
         formData.append('job_id', jobId); // 기존 호환 (사용 안할 수도 있음)
 
@@ -321,10 +343,28 @@ $(async function () {
                             }
                         } else if (data.index !== undefined && currentProcessingFile) {
                             // 번역 결과 처리
-                            receivedSubtitles++;
-                            translatedSubtitlesByFile[currentProcessingFile].push(data);
-                            updateRow(data, currentProcessingFile);
-                            updateProgress(receivedSubtitles, totalSubtitles);
+                            const processedSet = processedIndicesByFile[currentProcessingFile] || new Set();
+                            processedIndicesByFile[currentProcessingFile] = processedSet;
+                            const isNew = !processedSet.has(data.index);
+
+                            if (isNew) {
+                                processedSet.add(data.index);
+                                translatedSubtitlesByFile[currentProcessingFile].push(data);
+                                receivedSubtitles++;
+                            } else {
+                                const stored = translatedSubtitlesByFile[currentProcessingFile];
+                                const existingIdx = stored.findIndex(item => item.index === data.index);
+                                if (existingIdx !== -1) {
+                                    stored[existingIdx] = data;
+                                } else {
+                                    stored.push(data);
+                                }
+                            }
+
+                            updateRow(data, currentProcessingFile, isNew);
+                            if (isNew) {
+                                updateProgress(receivedSubtitles, totalSubtitles);
+                            }
                         }
                     } catch (e) {
                         console.warn('JSON 파싱 오류:', line, e);

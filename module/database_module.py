@@ -27,7 +27,9 @@ def init_db() -> None:
                 batch_size INTEGER,
                 custom_prompt TEXT,
                 thinking_budget INTEGER,
-                api_key TEXT
+                api_key TEXT,
+                context_compression INTEGER,
+                context_limit INTEGER
             )
             """
         )
@@ -39,6 +41,15 @@ def init_db() -> None:
         # 마이그레이션: api_key 컬럼이 없으면 추가
         try:
             conn.execute("ALTER TABLE presets ADD COLUMN api_key TEXT")
+        except Exception:
+            pass
+        # 마이그레이션: 컨텍스트 압축 옵션 컬럼 추가
+        try:
+            conn.execute("ALTER TABLE presets ADD COLUMN context_compression INTEGER")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE presets ADD COLUMN context_limit INTEGER")
         except Exception:
             pass
 
@@ -61,21 +72,34 @@ def save_preset(
     custom_prompt: Optional[str] = None,
     thinking_budget: Optional[int] = None,
     api_key: Optional[str] = None,
+    context_compression: Optional[int] = None,
+    context_limit: Optional[int] = None,
 ) -> None:
     """Insert or update a preset in the database."""
     with get_connection() as conn:
         conn.execute(
             """
-            INSERT INTO presets (name, target_lang, batch_size, custom_prompt, thinking_budget, api_key)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO presets (name, target_lang, batch_size, custom_prompt, thinking_budget, api_key, context_compression, context_limit)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(name) DO UPDATE SET
                 target_lang=excluded.target_lang,
                 batch_size=excluded.batch_size,
                 custom_prompt=excluded.custom_prompt,
                 thinking_budget=excluded.thinking_budget,
-                api_key=excluded.api_key
+                api_key=excluded.api_key,
+                context_compression=excluded.context_compression,
+                context_limit=excluded.context_limit
             """,
-            (name, target_lang, batch_size, custom_prompt, thinking_budget, api_key),
+            (
+                name,
+                target_lang,
+                batch_size,
+                custom_prompt,
+                thinking_budget,
+                api_key,
+                context_compression,
+                context_limit,
+            ),
         )
         conn.commit()
 
@@ -84,7 +108,12 @@ def get_preset(name: str) -> Optional[Dict[str, str | int | None]]:
     """Return a single preset by name."""
     with get_connection() as conn:
         cur = conn.execute(
-            "SELECT name, target_lang, batch_size, custom_prompt, thinking_budget, api_key FROM presets WHERE name=?",
+            """
+            SELECT name, target_lang, batch_size, custom_prompt, thinking_budget, api_key,
+                   context_compression, context_limit
+            FROM presets
+            WHERE name=?
+            """,
             (name,),
         )
         row = cur.fetchone()
@@ -96,6 +125,8 @@ def get_preset(name: str) -> Optional[Dict[str, str | int | None]]:
             "custom_prompt": row[3],
             "thinking_budget": row[4],
             "api_key": row[5],
+            "context_compression": row[6],
+            "context_limit": row[7],
         }
     return None
 
@@ -104,7 +135,12 @@ def list_presets() -> List[Dict[str, str | int | None]]:
     """Return all stored presets."""
     with get_connection() as conn:
         cur = conn.execute(
-            "SELECT name, target_lang, batch_size, custom_prompt, thinking_budget, api_key FROM presets ORDER BY name"
+            """
+            SELECT name, target_lang, batch_size, custom_prompt, thinking_budget, api_key,
+                   context_compression, context_limit
+            FROM presets
+            ORDER BY name
+            """
         )
         rows = cur.fetchall()
     return [
@@ -115,8 +151,19 @@ def list_presets() -> List[Dict[str, str | int | None]]:
             "custom_prompt": custom_prompt,
             "thinking_budget": thinking_budget,
             "api_key": api_key,
+            "context_compression": context_compression,
+            "context_limit": context_limit,
         }
-        for (name, target_lang, batch_size, custom_prompt, thinking_budget, api_key) in rows
+        for (
+            name,
+            target_lang,
+            batch_size,
+            custom_prompt,
+            thinking_budget,
+            api_key,
+            context_compression,
+            context_limit,
+        ) in rows
     ]
 
 

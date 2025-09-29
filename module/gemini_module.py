@@ -26,6 +26,9 @@ class GeminiClient:
                  thinking_budget: int = 8192,
                  response_schema: Optional[Dict] = None,
                  response_mime_type: Optional[str] = None,
+                 context_compression_enabled: bool = False,
+                 context_limit_tokens: Optional[int] = None,
+                 context_keep_recent: int = 2,
                  **kwargs):
         """
         대화형 GeminiClient를 초기화합니다.
@@ -39,6 +42,9 @@ class GeminiClient:
             thinking_budget (int): 사고 과정 토큰 예산 (기본값: 8192).
             response_schema (dict, optional): JSON 응답 스키마.
             response_mime_type (str, optional): 응답 MIME 타입 (기본값: response_schema 사용시 "application/json").
+            context_compression_enabled (bool): 컨텍스트 압축 사용 여부.
+            context_limit_tokens (int, optional): 히스토리 토큰 제한 (추정치 기반).
+            context_keep_recent (int): 압축 시 유지할 최신 턴 수.
             **kwargs: 추가 설정 옵션들.
         
         Raises:
@@ -88,6 +94,14 @@ class GeminiClient:
             
             # 대화 히스토리 초기화
             self.history: List[Dict[str, Any]] = []
+
+            # 컨텍스트 압축 설정
+            self.context_compression_enabled = bool(context_compression_enabled)
+            if context_limit_tokens is not None and context_limit_tokens <= 0:
+                context_limit_tokens = None
+            self.context_limit_tokens = context_limit_tokens
+            self.context_keep_recent = max(0, int(context_keep_recent))
+            self._context_summary_prefix = "[컨텍스트 요약]"
             
             # RPM 제한 관련 초기화
             self.rpm_limit = rpm_limit
@@ -129,7 +143,10 @@ class GeminiClient:
                 'safety_settings': safety_settings,
                 'thinking_budget': thinking_budget,
                 'response_schema': response_schema,
-                'response_mime_type': response_mime_type
+                'response_mime_type': response_mime_type,
+                'context_compression_enabled': self.context_compression_enabled,
+                'context_limit_tokens': self.context_limit_tokens,
+                'context_keep_recent': self.context_keep_recent,
             }
             
             logger.info(f"대화형 Gemini 클라이언트가 초기화되었습니다. 모델: {self.model}")
@@ -166,6 +183,200 @@ class GeminiClient:
         
         # 현재 요청 시간 기록
         self.request_times.append(current_time)
+
+    def _estimate_text_tokens(self, text: str) -> int:
+        """간단한 휴리스틱으로 텍스트 토큰 수를 추정합니다."""
+        if not text:
+            return 0
+        text = text.strip()
+        if not text:
+            return 0
+        char_tokens = max(1, len(text) // 4)
+        word_tokens = len(text.split())
+        return max(char_tokens, word_tokens, 1)
+
+    def _estimate_history_tokens(self) -> int:
+        """현재 히스토리의 토큰 수를 추정합니다."""
+        total = 0
+        for message in self.history:
+            parts = message.get('parts') or []
+            for part in parts:
+                total += self._estimate_text_tokens(part.get('text', ''))
+        total += len(self.history) * 4  # 역할/메타데이터 오버헤드 보정
+        return total
+
+    def _prepare_history_for_new_message(self, upcoming_text: str) -> None:
+        """새 메시지를 추가하기 전에 컨텍스트 압축이 필요하면 수행합니다."""
+        if not self.context_compression_enabled or not self.context_limit_tokens:
+            return
+        try:
+            self._compress_history_if_needed(upcoming_text or '')
+        except Exception as exc:
+            logger.warning("컨텍스트 압축 중 오류가 발생해 기존 히스토리를 유지합니다: %s", exc)
+
+    def _compress_history_if_needed(self, upcoming_text: str) -> None:
+        """히스토리가 제한을 초과하면 요약을 통해 압축합니다."""
+        limit = self.context_limit_tokens
+        if not limit:
+            return
+
+        upcoming_tokens = self._estimate_text_tokens(upcoming_text)
+        attempts = 0
+        keep_turns = self.context_keep_recent
+
+        while attempts < 3:
+            current_tokens = self._estimate_history_tokens()
+            projected_tokens = current_tokens + upcoming_tokens
+            if projected_tokens <= limit:
+                logger.debug(
+                    "컨텍스트 압축 불필요: 히스토리 %sT + 다음 %sT <= 제한 %sT",
+                    current_tokens,
+                    upcoming_tokens,
+                    limit,
+                )
+                return
+
+            prev_keep_turns = keep_turns
+            logger.info(
+                "컨텍스트 압축 시도 %s회차: 히스토리 %sT, 다음 %sT, 제한 %sT, keep_recent=%s",
+                attempts + 1,
+                current_tokens,
+                upcoming_tokens,
+                limit,
+                prev_keep_turns,
+            )
+
+            compressed = self._compress_history_once(prev_keep_turns)
+            if not compressed:
+                logger.warning(
+                    "컨텍스트 압축 중단: 히스토리 %sT, 다음 %sT, 제한 %sT (keep_recent=%s)",
+                    current_tokens,
+                    upcoming_tokens,
+                    limit,
+                    prev_keep_turns,
+                )
+                return
+
+            attempts += 1
+            new_tokens = self._estimate_history_tokens()
+            logger.info(
+                "컨텍스트 압축 결과 %s회차: 히스토리 %sT → %sT (추정)",
+                attempts,
+                current_tokens,
+                new_tokens,
+            )
+
+            if new_tokens + upcoming_tokens <= limit:
+                return
+
+            keep_turns = max(0, prev_keep_turns - 1)
+
+        final_tokens = self._estimate_history_tokens()
+        final_projected = final_tokens + upcoming_tokens
+        if final_projected > limit:
+            logger.warning(
+                "컨텍스트 압축 한계: 히스토리 %sT → %sT, 다음 %sT 포함 시 %sT / 제한 %sT",
+                current_tokens,
+                final_tokens,
+                upcoming_tokens,
+                final_projected,
+                limit,
+            )
+
+    def _compress_history_once(self, keep_turns: int) -> bool:
+        """히스토리의 오래된 부분을 요약 메시지로 대체합니다."""
+        if not self.history:
+            return False
+
+        keep_turns = max(0, int(keep_turns))
+        keep_messages = keep_turns * 2  # 사용자/모델 한 턴당 2개 메시지
+        if keep_messages >= len(self.history):
+            return False
+
+        if keep_messages % 2 == 1:
+            keep_messages = min(len(self.history), keep_messages + 1)
+
+        split_index = len(self.history) - keep_messages if keep_messages else len(self.history)
+        compress_candidates = self.history[:split_index]
+        preserved_history = self.history[split_index:] if split_index < len(self.history) else []
+
+        if not compress_candidates:
+            return False
+
+        summary_text = self._summarize_messages(compress_candidates)
+        if not summary_text:
+            return False
+
+        summary_message = {
+            'role': 'model',
+            'parts': [{'text': f"{self._context_summary_prefix}\n{summary_text}"}]
+        }
+
+        new_history: List[Dict[str, Any]] = [summary_message]
+        new_history.extend(preserved_history)
+        self.history = new_history
+        logger.info("대화 히스토리가 요약되어 압축되었습니다. 현재 메시지 수: %s", len(self.history))
+        return True
+
+    def _summarize_messages(self, messages: List[Dict[str, Any]]) -> Optional[str]:
+        """지정된 메시지 구간을 요약합니다."""
+        history_dump_lines: List[str] = []
+        for msg in messages:
+            role = msg.get('role', 'user').upper()
+            parts = msg.get('parts') or []
+            text_chunks = []
+            for part in parts:
+                text = (part.get('text') or '').strip()
+                if text:
+                    text_chunks.append(text)
+            if not text_chunks:
+                continue
+            joined = '\n'.join(text_chunks).strip()
+            if joined:
+                history_dump_lines.append(f"{role}:\n{joined}")
+
+        if not history_dump_lines:
+            return None
+
+        history_dump = "\n\n---\n\n".join(history_dump_lines)
+        summary_prompt = (
+            "당신은 번역 세션의 컨텍스트를 요약하는 보조 도구입니다. "
+            "아래 대화에서 스타일 규칙, 용어, 주요 결정, 주의/금지 사항, 미해결 항목을 자세하게 정리하세요.\n"
+            "응답 형식:\n"
+            "- 스타일: ...\n"
+            "- 용어: ...\n"
+            "- 결정 사항: ...\n"
+            "- 주의/금지: ...\n"
+            "각 항목이 비어 있으면 '없음'이라고 표기하고, 반드시 한국어로 답변하세요.\n"
+            "이전 [컨텍스트 요약]이 히스토리에 존재할 경우 이를 반영하여 작성하세요.\n"
+            "=== 대화 기록 시작 ===\n"
+            f"{history_dump}\n"
+            "=== 대화 기록 끝 ==="
+        )
+
+        try:
+            self._check_rpm_limit()
+            compression_config = {
+                k: v for k, v in self.generation_config.items()
+                if k not in {'response_schema', 'response_mime_type'}
+            }
+            compression_config['temperature'] = 0.3
+            try:
+                max_tokens = int(self.generation_config.get('max_output_tokens', 4096))
+            except (TypeError, ValueError):
+                max_tokens = 4096
+            compression_config['max_output_tokens'] = min(2048, max_tokens)
+            config_payload = cast(types.GenerateContentConfigDict, compression_config)
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=[{'role': 'user', 'parts': [{'text': summary_prompt}]}],
+                config=config_payload
+            )
+            summary_text = (response.text or '').strip()
+            return summary_text or None
+        except Exception as exc:
+            logger.warning("컨텍스트 요약 생성 실패: %s", exc)
+            return None
 
     def set_rpm_limit(self, rpm_limit: int):
         """
@@ -236,7 +447,8 @@ class GeminiClient:
             google_exceptions.GoogleAPICallError: API 호출에 실패한 경우.
             Exception: 그 외 예상치 못한 오류가 발생한 경우.
         """
-        # RPM 제한 확인 및 대기
+        # 컨텍스트 압축 사전 처리 및 RPM 확인
+        self._prepare_history_for_new_message(message)
         self._check_rpm_limit()
         
         # 사용자 메시지를 히스토리에 추가
@@ -307,7 +519,8 @@ class GeminiClient:
             google_exceptions.GoogleAPICallError: API 호출에 실패한 경우.
             Exception: 그 외 예상치 못한 오류가 발생한 경우.
         """
-        # RPM 제한 확인 및 대기
+        # 컨텍스트 압축 사전 처리 및 RPM 확인
+        self._prepare_history_for_new_message(message)
         self._check_rpm_limit()
         
         # 사용자 메시지를 히스토리에 추가
@@ -614,4 +827,3 @@ if __name__ == "__main__":
     test_response_schema()
     test_stream_output()
     test_stream_with_schema()
-
