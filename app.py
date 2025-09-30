@@ -642,12 +642,17 @@ def api_get_preset(name):
     if preset:
         # 추가 설정(API 키, 모델, thinking_budget, context 관련 등)은 프리셋과 분리됨.
         # (요청에 따라 thinking_budget은 프리셋에 포함해 저장/로드 가능하도록 허용)
+        thinking_budget_value = preset.get('thinking_budget')
+        # DB에서 -1로 저장된 경우 'auto'로 변환
+        if thinking_budget_value == -1:
+            thinking_budget_value = 'auto'
+
         result = {
             'name': preset.get('name'),
             'target_lang': preset.get('target_lang'),
             'batch_size': preset.get('batch_size'),
             'custom_prompt': preset.get('custom_prompt'),
-            'thinking_budget': preset.get('thinking_budget'),  # 0 또는 None 가능
+            'thinking_budget': thinking_budget_value,  # 0, 'auto', 또는 None 가능
         }
         return jsonify(result)
     return jsonify({'error': 'not found'}), 404
@@ -665,14 +670,15 @@ def api_save_preset(name):
     except (ValueError, TypeError):
         batch_size = None
     custom_prompt = data.get('custom_prompt')
-    # thinking_budget 처리 (0 또는 양의 정수)
+    # thinking_budget 처리 (0, -1(auto), 또는 양의 정수)
     thinking_budget_val = None
     if 'thinking_budget' in data:
         try:
             tb_raw = data.get('thinking_budget')
             if tb_raw is not None and tb_raw != '':
+                # -1은 auto를 의미하며 DB에 그대로 저장
                 tb_int = int(tb_raw)
-                if tb_int >= 0:
+                if tb_int >= -1:  # -1 이상의 값만 허용 (-1, 0, 양수)
                     thinking_budget_val = tb_int
         except (ValueError, TypeError):
             thinking_budget_val = None
