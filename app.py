@@ -165,8 +165,9 @@ def translate_srt_stream(content: str, client, target_lang: str = '한국어', b
         # 조건: 히스토리(현재 + 이번 배치 프롬프트 예상)가 context_limit_tokens를 초과할 때만 스냅샷 재구성 실행
         try:
             limit_tokens = getattr(client, 'context_limit_tokens', None)
+            compression_enabled = getattr(client, 'context_compression_enabled', False)
             should_snapshot = False
-            if limit_tokens:
+            if compression_enabled and limit_tokens:
                 try:
                     current_hist_tokens = client._estimate_history_tokens()  # 내부 휴리스틱 사용
                     upcoming_tokens = client._estimate_text_tokens(prompt)
@@ -177,15 +178,14 @@ def translate_srt_stream(content: str, client, target_lang: str = '한국어', b
                     pass
 
             if should_snapshot:
+                logger.debug(
+                    "컨텍스트 압축 활성 & 한도 초과 예상 -> 히스토리 스냅샷 재구성 실행 (current+upcoming > limit)"
+                )
                 client.set_reconstructed_subtitles(
                     already_processed,
                     processed_translations,
                     keep_recent_entries=keep_recent_entries,
                     as_individual_messages=True,
-                )
-            else:
-                logger.debug(
-                    "스냅샷 생략 (현재 히스토리+프롬프트 추정 토큰이 제한 이하 또는 제한 미설정)"
                 )
         except Exception as exc:
             logger.debug("조건부 set_reconstructed_subtitles 처리 중 오류: %s", exc)
@@ -194,13 +194,45 @@ def translate_srt_stream(content: str, client, target_lang: str = '한국어', b
         max_retries = 5
         batch_success = False
         confirmed_translations: Dict[int, str] = {}
+        current_batch_to_translate = list(batch)  # 현재 시도할 배치
 
         while retry_count < max_retries and not batch_success:
             # 중단 플래그 확인
             if stop_flag and stop_flag.get('stopped', False):
                 logger.info("중단 플래그가 설정되어 번역을 중지합니다.")
                 return
-                
+
+            # 재시도 시 미처리된 엔트리만 포함한 새 배치 생성
+            if retry_count > 0:
+                unprocessed_indices = set(original_sub_map.keys()) - set(confirmed_translations.keys())
+                if not unprocessed_indices:
+                    # 모든 엔트리가 처리됨
+                    batch_success = True
+                    break
+
+                current_batch_to_translate = [original_sub_map[idx] for idx in unprocessed_indices]
+                logger.info(f"재시도 {retry_count}회: 미처리 엔트리 {len(current_batch_to_translate)}개만 재번역")
+
+                # 미처리 엔트리만 포함한 새 프롬프트 생성
+                batch_items = []
+                for sub in current_batch_to_translate:
+                    escaped_text = sub["text"].replace('"', '\"').replace('\n', '\n').replace('\r', '')
+                    batch_items.append(json.dumps({"index": sub["index"], "text": escaped_text}))
+
+                batch_json = '[' + ', '.join(batch_items) + ']'
+                prompt = f"""{user_prompt}
+
+    다음 자막들을 자연스러운 {target_lang}로 번역하세요.
+
+    번역할 자막들:
+    {batch_json}
+
+    주의사항:
+    - index는 원본과 동일하게 유지하세요
+    - text만 번역하세요
+    - 응답은 JSON 스키마에 정의된 형식을 정확히 따르세요
+    """
+
             try:
                 buffer = ""
                 processed_indices = set()
@@ -212,16 +244,16 @@ def translate_srt_stream(content: str, client, target_lang: str = '한국어', b
                     if stop_flag and stop_flag.get('stopped', False):
                         logger.info("스트리밍 중 중단 플래그가 설정되어 번역을 중지합니다.")
                         return
-                        
+
                     buffer += chunk
-                    
+
                     # translations 배열 내의 개별 객체들을 실시간으로 파싱
                     while True:
                         # "index"를 포함한 객체 찾기
                         index_pos = buffer.find('"index"')
                         if index_pos == -1:
                             break
-                        
+
                         # 해당 객체의 시작점 찾기
                         object_start = buffer.rfind('{', 0, index_pos)
                         if object_start == -1:
@@ -234,22 +266,22 @@ def translate_srt_stream(content: str, client, target_lang: str = '한국어', b
                                 brace_level += 1
                             elif buffer[i] == '}':
                                 brace_level -= 1
-                            
+
                             if brace_level == 0:
                                 object_end = i
                                 break
-                        
+
                         if object_end == -1:
                             break
 
                         obj_str = buffer[object_start : object_end + 1]
-                        
+
                         try:
                             item = json.loads(obj_str)
                             item_index = item.get("index")
                             original_sub = original_sub_map.get(item_index)
 
-                            if original_sub and item_index not in processed_indices:
+                            if original_sub and item_index not in processed_indices and item_index not in confirmed_translations:
                                 result = {
                                     'index': item_index,
                                     'start': original_sub['start'],
@@ -260,31 +292,33 @@ def translate_srt_stream(content: str, client, target_lang: str = '한국어', b
                                 yield json.dumps(result, ensure_ascii=False) + "\n"
                                 processed_indices.add(item_index)
                                 batch_translations[item_index] = result['translated']
-                            
+
                             buffer = buffer[object_end + 1:]
 
                         except json.JSONDecodeError:
                             break
-                
-                if len(processed_indices) == len(batch):
-                    confirmed_translations = dict(batch_translations)
+
+                # 이번 시도에서 파싱된 엔트리를 confirmed에 추가
+                confirmed_translations.update(batch_translations)
+
+                # 원본 배치의 모든 엔트리가 처리되었는지 확인
+                if len(confirmed_translations) == len(batch):
                     batch_success = True
                 else:
-                    raise ValueError("스트림 처리 중 일부 자막이 누락되었습니다.")
+                    raise ValueError(f"스트림 처리 중 일부 자막이 누락되었습니다. (처리됨: {len(confirmed_translations)}/{len(batch)})")
 
             except Exception as e:
                 retry_count += 1
                 if retry_count < max_retries:
-                    logger.error(f"번역 재시도 {retry_count}회: {e}")
+                    logger.error(f"번역 재시도 {retry_count}회: {e} (이미 처리됨: {len(confirmed_translations)}/{len(batch)})")
                     try:
                         client.delete_last_turn()
                     except Exception:
                         pass
-                    time.sleep(10) 
+                    time.sleep(10)
                 else:
                     error_message = f"배치 처리 실패 (재시도 {max_retries}회 초과): {e}"
-                    confirmed_translations.update(batch_translations)
-                    unprocessed_indices = set(original_sub_map.keys()) - processed_indices
+                    unprocessed_indices = set(original_sub_map.keys()) - set(confirmed_translations.keys())
                     for index in unprocessed_indices:
                         sub = original_sub_map[index]
                         error_result = {
@@ -302,6 +336,49 @@ def translate_srt_stream(content: str, client, target_lang: str = '한국어', b
 
         if confirmed_translations:
             processed_translations.update(confirmed_translations)
+
+            # 재시도로 인해 히스토리의 마지막 턴이 부분 요청/응답만 포함할 수 있음
+            # 전체 배치를 반영한 완전한 턴으로 히스토리 재구성
+            if retry_count > 0 and len(client.history) >= 2:
+                if client.history[-2].get('role') == 'user' and client.history[-1].get('role') == 'model':
+                    # 원본 전체 배치의 프롬프트 재구성
+                    original_batch_items = []
+                    for idx in sorted(original_sub_map.keys()):
+                        sub = original_sub_map[idx]
+                        escaped_text = sub["text"].replace('"', '\"').replace('\n', '\n').replace('\r', '')
+                        original_batch_items.append(json.dumps({"index": sub["index"], "text": escaped_text}))
+
+                    original_batch_json = '[' + ', '.join(original_batch_items) + ']'
+                    complete_prompt = f"""{user_prompt}
+
+    다음 자막들을 자연스러운 {target_lang}로 번역하세요.
+
+    번역할 자막들:
+    {original_batch_json}
+
+    주의사항:
+    - index는 원본과 동일하게 유지하세요
+    - text만 번역하세요
+    - 응답은 JSON 스키마에 정의된 형식을 정확히 따르세요
+    """
+
+                    # 전체 배치의 완전한 JSON 응답 재구성
+                    complete_translations = []
+                    for idx in sorted(confirmed_translations.keys()):
+                        complete_translations.append({
+                            "index": idx,
+                            "text": confirmed_translations[idx]
+                        })
+
+                    complete_response = json.dumps(
+                        {"translations": complete_translations},
+                        ensure_ascii=False
+                    )
+
+                    # 히스토리의 마지막 턴을 완전한 요청/응답으로 교체
+                    client.history[-2]['parts'][0]['text'] = complete_prompt
+                    client.history[-1]['parts'][0]['text'] = complete_response
+                    logger.info(f"재시도 후 히스토리 재구성 완료: 전체 {len(confirmed_translations)}개 엔트리 반영")
 
 @app.route('/')
 def index():
