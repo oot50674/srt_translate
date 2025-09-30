@@ -84,7 +84,7 @@ def save_history_log(client: GeminiClient, job_id: Optional[str] = None) -> None
 
 ## 레거시 재구성 헬퍼 제거됨: GeminiClient.set_reconstructed_subtitles 로 일원화
 
-def translate_srt_stream(content: str, client, target_lang: str = '한국어', batch_size: int = 10, user_prompt: str = '', thinking_budget: int = 8192, stop_flag = None):
+def translate_srt_stream(content: str, client, target_lang: str = '한국어', batch_size: int = 10, user_prompt: str = '', thinking_budget: int = 0, stop_flag = None):
     """SRT 텍스트를 번역하며 진행 상황을 스트림으로 제공합니다."""
     logger.info("translate_srt_stream 호출됨 - 파라미터: target_lang=%s, batch_size=%s, thinking_budget=%s",
                target_lang, batch_size, thinking_budget)
@@ -146,19 +146,20 @@ def translate_srt_stream(content: str, client, target_lang: str = '한국어', b
         batch_json = '[' + ', '.join(batch_items) + ']'
 
         prompt = f"""{user_prompt}
-다음 자막들을 자연스러운 {target_lang}로 번역하세요.
 
-번역할 자막들:
-{batch_json}
+    다음 자막들을 자연스러운 {target_lang}로 번역하세요.
 
-주의사항:
-- index는 원본과 동일하게 유지하세요
-- text만 번역하세요
-- 응답은 JSON 스키마에 정의된 형식을 정확히 따르세요
-"""
+    번역할 자막들:
+    {batch_json}
+
+    주의사항:
+    - index는 원본과 동일하게 유지하세요
+    - text만 번역하세요
+    - 응답은 JSON 스키마에 정의된 형식을 정확히 따르세요
+    """
 
         # 새 통합 방식: 매 배치 전에 GeminiClient에 재구성 자막 블록만 업데이트.
-        # 실제 [컨텍스트 요약] 생성/압축 시점은 GeminiClient 내부 로직이 판단.
+        # 실제 [WORK SUMMARY] 생성/압축 시점은 GeminiClient 내부 로직이 판단.
         already_processed = subtitles[:i]
         keep_recent_entries = max(0, int(getattr(client, 'context_keep_recent', DEFAULT_CONTEXT_KEEP_RECENT) or 0))
         # 조건: 히스토리(현재 + 이번 배치 프롬프트 예상)가 context_limit_tokens를 초과할 때만 스냅샷 재구성 실행
@@ -398,7 +399,9 @@ def api_create_job():
     # 새로운 작업을 추가하기 전에 오래된 작업(30일 경과)을 정리합니다.
     delete_old_jobs()
     
+    # SRT 파일 데이터 수집: 업로드된 파일 또는 폼 텍스트를 리스트로 저장
     files_data = []
+    # 업로드된 파일들 처리 (다중 파일 지원)
     for f in request.files.getlist('srt_files'):
         if f and f.filename:
             files_data.append({
@@ -406,37 +409,47 @@ def api_create_job():
                 'text': f.read().decode('utf-8')
             })
 
+    # 파일이 없으면 폼 데이터에서 SRT 텍스트를 가져옴
     if not files_data:
         text = request.form.get('srt_text', '')
         if text.strip():
             files_data.append({'name': 'pasted.srt', 'text': text})
 
+    # SRT 데이터가 없으면 에러 반환
     if not files_data:
         return jsonify({'error': 'no srt data'}), 400
 
+    # 고유 작업 ID 생성
     job_id = str(uuid.uuid4())
+    # 배치 크기 파라미터 처리 (기본값 10)
     batch_size = request.form.get('batch_size', 10)
     try:
         batch_size = int(batch_size)
     except (ValueError, TypeError):
         batch_size = 10
-    thinking_budget = request.form.get('thinking_budget', 8192)
+    # Thinking Budget 파라미터 처리 (기본값 0)
+    thinking_budget = request.form.get('thinking_budget', 0)
     try:
         thinking_budget = int(thinking_budget)
     except (ValueError, TypeError):
-        thinking_budget = 8192
+        thinking_budget = 0
+    # 컨텍스트 압축 설정 처리
     raw_context_compression = (request.form.get('context_compression') or '').strip()
     context_compression = 1 if raw_context_compression in {'1', 'true', 'True', 'on'} else 0
+    # 컨텍스트 토큰 제한 처리
     context_limit = request.form.get('context_limit')
     try:
         context_limit = int(context_limit) if context_limit not in (None, '') else None
     except (ValueError, TypeError):
         context_limit = None
+    # API 키 처리 (제공 시 .env에 저장)
     api_key = (request.form.get('api_key') or '').strip()
     if api_key:
         # 사용자가 제출한 키를 즉시 .env에 저장하고 환경에 반영
         save_api_key_to_env(api_key)
+    # 모델 이름 처리 (기본값 DEFAULT_MODEL)
     model_name = (request.form.get('model') or '').strip() or DEFAULT_MODEL
+    # 작업 데이터 구성
     job_data = {
         'files': files_data,
         'target_lang': request.form.get('target_lang', '한국어'),
@@ -445,11 +458,11 @@ def api_create_job():
         'thinking_budget': thinking_budget,
         'context_compression': context_compression,
         'context_limit': context_limit,
-        # 더 이상 DB에는 키를 저장하지 않습니다.
-        'api_key': None,
         'model': model_name
     }
+    # 작업 데이터를 DB에 저장
     save_job(job_id, job_data) # type: ignore
+    # 생성된 작업 ID 반환
     return jsonify({'job_id': job_id})
 
 @app.route('/api/jobs/<job_id>', methods=['GET'])
@@ -500,7 +513,7 @@ def upload_srt():
     except (ValueError, TypeError):
         batch_size = 10
     user_prompt = request.form.get('custom_prompt', '')
-    thinking_budget = request.form.get('thinking_budget', 8192)
+    thinking_budget = request.form.get('thinking_budget', 0)
     api_key = (request.form.get('api_key') or '').strip()
     model_name = (request.form.get('model') or '').strip() or DEFAULT_MODEL
     job_id = (request.form.get('job_id') or '').strip() or None
@@ -522,8 +535,8 @@ def upload_srt():
     try:
         thinking_budget_val = int(thinking_budget)
     except (ValueError, TypeError):
-        logger.warning("thinking_budget 파라미터 변환 실패, 기본값 8192 사용: %s", thinking_budget)
-        thinking_budget_val = 8192
+        logger.warning("thinking_budget 파라미터 변환 실패, 기본값 0 사용: %s", thinking_budget)
+        thinking_budget_val = 0
 
     # -1은 auto를 의미하며, thinking_config를 설정하지 않음 (Gemini가 자동 결정)
     if thinking_budget_val == -1:
@@ -629,7 +642,7 @@ def parse_srt_route():
     subtitles = srt_module.parse_srt_text(content)
     return jsonify(subtitles)
 
-# ----- Preset management API (추가 설정과 독립) -----
+# ----- Preset management API -----
 
 @app.route('/api/presets', methods=['GET'])
 def api_list_presets():
@@ -640,7 +653,6 @@ def api_list_presets():
 def api_get_preset(name):
     preset = get_preset(name)
     if preset:
-        # 추가 설정(API 키, 모델, thinking_budget, context 관련 등)은 프리셋과 분리됨.
         # (요청에 따라 thinking_budget은 프리셋에 포함해 저장/로드 가능하도록 허용)
         thinking_budget_value = preset.get('thinking_budget')
         # DB에서 -1로 저장된 경우 'auto'로 변환
@@ -661,7 +673,6 @@ def api_get_preset(name):
 def api_save_preset(name):
     data = request.get_json() or {}
     # 프리셋은 번역 기본 파라미터를 저장합니다.
-    # (target_lang, batch_size, custom_prompt, thinking_budget)
     # thinking_budget은 요청에 따라 프리셋 단위 저장을 허용 (글로벌 기본값과 별개로 오버라이드 용도)
     target_lang = data.get('target_lang')
     batch_size_raw = data.get('batch_size')

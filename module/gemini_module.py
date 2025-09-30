@@ -23,7 +23,7 @@ class GeminiClient:
                  generation_config: Optional[Dict[str, Any]] = None,
                  rpm_limit: int = 10,
                  safety_settings: Optional[List[Dict[str, str]]] = None,
-                 thinking_budget: int = 8192,
+                 thinking_budget: int = 0,
                  response_schema: Optional[Dict] = None,
                  response_mime_type: Optional[str] = None,
                  context_compression_enabled: bool = False,
@@ -39,7 +39,7 @@ class GeminiClient:
             generation_config (dict, optional): 생성 설정 (temperature, max_output_tokens 등).
             rpm_limit (int): 분당 최대 요청 수 (기본값: 10).
             safety_settings (list, optional): 안전 설정 목록.
-            thinking_budget (int): 사고 과정 토큰 예산 (기본값: 8192).
+            thinking_budget (int): 사고 과정 토큰 예산 (기본값: 0).
             response_schema (dict, optional): JSON 응답 스키마.
             response_mime_type (str, optional): 응답 MIME 타입 (기본값: response_schema 사용시 "application/json").
             context_compression_enabled (bool): 컨텍스트 압축 사용 여부.
@@ -105,7 +105,7 @@ class GeminiClient:
                 context_limit_tokens = None
             self.context_limit_tokens = context_limit_tokens
             self.context_keep_recent = max(0, int(context_keep_recent))
-            self._context_summary_prefix = "[컨텍스트 요약]"
+            self._context_summary_prefix = "[WORK SUMMARY]"
             
             # RPM 제한 관련 초기화
             self.rpm_limit = rpm_limit
@@ -375,7 +375,7 @@ class GeminiClient:
             "- 결정 사항: ...\n"
             "- 주의/금지: ...\n"
             "각 항목이 비어 있으면 '없음'이라고 표기하고, 반드시 한국어로 답변하세요.\n"
-            "이전 [컨텍스트 요약]이 히스토리에 존재할 경우 이를 반영하여 작성하세요.\n"
+            "이전 [WORK SUMMARY]이 히스토리에 존재할 경우 이를 반영하여 작성하세요.\n"
             "=== 대화 기록 시작 ===\n"
             f"{history_dump}\n"
             "=== 대화 기록 끝 ==="
@@ -712,7 +712,7 @@ class GeminiClient:
         """현재 대화 히스토리를 반환합니다."""
         return self.history.copy()
 
-    # ------------------ 재구성 자막 통합 관련 공개 메서드 ------------------
+    # ------------------ 자막 요약 및 재구성 메서드 ------------------
     def set_reconstructed_subtitles(self, subtitles: List[Dict[str, Any]], translations: Dict[int, str], keep_recent_entries: int = 100, as_individual_messages: bool = True):
         """(통합 스냅샷 모드)
         메소드 이름은 유지하되 내부 동작은 '히스토리를 summary + 재구성 엔트리 두 메시지'로
@@ -831,13 +831,13 @@ class GeminiClient:
             if key == 'top_p' and not 0.0 <= value <= 1.0:
                 raise ValueError("top_p는 0.0과 1.0 사이의 값이어야 합니다.")
             if key == 'thinking_budget':
-                if value <= 0:
-                    raise ValueError("thinking_budget는 양수여야 합니다.")
-                # thinking_config 업데이트
-                self.generation_config['thinking_config'] = types.ThinkingConfig(
-                    thinking_budget=value
-                )
-                logger.info(f"thinking_budget가 {value}로 변경되었습니다.")
+                try:
+                    self.generation_config['thinking_config'] = types.ThinkingConfig(
+                        thinking_budget=value
+                    )
+                    logger.info(f"thinking_budget가 {value}로 변경되었습니다. (원시 값 그대로 전달)")
+                except Exception as e:
+                    logger.warning(f"thinking_budget 설정 실패(값={value}) - SDK 예외: {e}")
                 continue
             
             self.generation_config[key] = value
@@ -848,19 +848,16 @@ class GeminiClient:
         사고 과정 토큰 예산을 설정합니다.
         
         Args:
-            budget (int): 새로운 thinking budget 값.
-        
-        Raises:
-            ValueError: budget이 양수가 아닌 경우.
+            budget (int): 새로운 thinking budget 값. 0이나 -1도 그대로 전달됩니다.
         """
-        if budget <= 0:
-            raise ValueError("thinking_budget는 양수여야 합니다.")
-        
-        self.generation_config['thinking_config'] = types.ThinkingConfig(
-            thinking_budget=budget
-        )
-        self._init_args['thinking_budget'] = budget
-        logger.info(f"Thinking budget이 {budget}으로 설정되었습니다.")
+        try:
+            self.generation_config['thinking_config'] = types.ThinkingConfig(
+                thinking_budget=budget
+            )
+            self._init_args['thinking_budget'] = budget
+            logger.info(f"Thinking budget이 {budget} (원시 값)으로 설정되었습니다.")
+        except Exception as e:
+            logger.error(f"Thinking budget 설정 실패(값={budget}) - SDK 예외: {e}")
 
     def get_thinking_budget(self) -> int:
         """
@@ -872,7 +869,7 @@ class GeminiClient:
         thinking_config = self.generation_config.get('thinking_config')
         if thinking_config and hasattr(thinking_config, 'thinking_budget'):
             return thinking_config.thinking_budget
-        return 8192  # 기본값 반환
+        return 0  # 기본값 반환
 
     def set_response_schema(self, response_schema: Optional[Dict] = None,
                            response_mime_type: Optional[str] = None):
@@ -902,96 +899,3 @@ class GeminiClient:
             # 스키마가 없고 MIME 타입도 지정하지 않았으면 제거
             self.generation_config.pop('response_mime_type', None)
             self.default_response_mime_type = None
-
-if __name__ == "__main__":
-    import json
-    
-    def test_response_schema():
-        """response_schema 기능 테스트"""
-        print("=== response_schema 테스트 시작 ===")
-        
-        test_schema = {
-            "type": "object",
-            "properties": {
-                "message": {"type": "string"},
-                "language": {"type": "string"}
-            },
-            "required": ["message", "language"]
-        }
-        
-        try:
-            client = GeminiClient()
-            response = client.send_message(
-                "한국어로 '안녕하세요'라고 인사하고 JSON 형태로 응답해주세요. message와 language 필드를 포함해주세요.",
-                response_schema=test_schema
-            )
-            
-            print(f"응답: {response}")
-            
-            # JSON 파싱 테스트
-            data = json.loads(response)
-            print(f"파싱된 데이터: {data}")
-            print(f"message: {data.get('message')}")
-            print(f"language: {data.get('language')}")
-            
-        except Exception as e:
-            print(f"테스트 실패: {e}")
-        
-        print()
-    
-    def test_stream_output():
-        """스트림 출력 테스트"""
-        print("=== 스트림 출력 테스트 시작 ===")
-        
-        try:
-            client = GeminiClient()
-            print("스트리밍 응답:")
-            
-            for chunk in client.send_message_stream("간단한 한국어 인사말을 해주세요."):
-                print(chunk, end="", flush=True)
-            
-            print("\n=== 스트리밍 완료 ===")
-            
-        except Exception as e:
-            print(f"스트리밍 테스트 실패: {e}")
-        
-        print()
-    
-    def test_stream_with_schema():
-        """스키마가 적용된 스트림 출력 테스트"""
-        print("=== 스키마 + 스트림 테스트 시작 ===")
-        
-        test_schema = {
-            "type": "object",
-            "properties": {
-                "greeting": {"type": "string"},
-                "mood": {"type": "string"}
-            },
-            "required": ["greeting", "mood"]
-        }
-        
-        try:
-            client = GeminiClient()
-            print("JSON 스키마 스트리밍 응답:")
-            
-            full_response = ""
-            for chunk in client.send_message_stream(
-                "기분 좋은 인사말을 JSON 형태로 응답해주세요. greeting과 mood 필드를 포함해주세요.",
-                response_schema=test_schema
-            ):
-                print(chunk, end="", flush=True)
-                full_response += chunk
-            
-            print(f"\n\n전체 응답: {full_response}")
-            
-            # JSON 파싱 테스트
-            data = json.loads(full_response)
-            print(f"파싱된 데이터: {data}")
-            
-        except Exception as e:
-            print(f"스키마 스트리밍 테스트 실패: {e}")
-    
-    # 테스트 실행
-    test_response_schema()
-    test_stream_output()
-    test_stream_with_schema()

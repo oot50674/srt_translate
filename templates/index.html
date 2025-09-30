@@ -111,7 +111,14 @@
                                         <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                                             <div>
                                                 <label for="target-lang" class="block text-sm font-medium text-slate-700 mb-1">타겟 언어</label>
-                                                <input type="text" id="target-lang" class="form-input w-full rounded-md border-slate-300" placeholder="예: 한국어" />
+                                                <input type="text" id="target-lang" class="form-input w-full rounded-md border-slate-300" placeholder="예: 한국어" list="target-lang-options" />
+                                                <datalist id="target-lang-options">
+                                                    <option value="한국어">
+                                                    <option value="영어">
+                                                    <option value="일본어">
+                                                    <option value="중국어(간체)">
+                                                    <option value="중국어(번체)">
+                                                </datalist>
                                             </div>
                                     <div>
                                         <label for="chunk-size" class="block text-sm font-medium text-slate-700 mb-1">청크 크기</label>
@@ -125,7 +132,7 @@
                                                 <label for="disable-thinking" class="text-xs text-slate-600">비활성화</label>
                                             </div>
                                         </div>
-                                        <input type="text" id="thinking-budget" class="form-input w-full rounded-md border-slate-300" value="" placeholder="예: 2048 또는 auto" list="thinking-budget-options" />
+                                        <input type="text" id="thinking-budget" class="form-input w-full rounded-md border-slate-300" value="auto" placeholder="예: 2048 또는 auto" list="thinking-budget-options" />
                                         <datalist id="thinking-budget-options">
                                             <option value="auto">
                                             <option value="512">
@@ -141,8 +148,8 @@
                                 <div class="flex items-center gap-2">
                                     <select id="preset-select" class="form-select rounded-md border-slate-300 text-sm"></select>
                                     <button type="button" id="save-preset-btn" class="px-3 py-2 bg-slate-200 rounded-md text-sm font-semibold hover:bg-slate-300">프리셋 저장</button>
-                                    <!-- 새 프리셋 생성 버튼 추가 -->
                                     <button type="button" id="new-preset-btn" class="px-3 py-2 bg-slate-900 text-white rounded-md text-sm font-semibold hover:bg-slate-700">새로 만들기</button>
+                                 <button type="button" id="delete-preset-btn" class="ml-auto px-3 py-2 bg-red-100 text-red-700 rounded-md text-sm font-semibold hover:bg-red-200 disabled:opacity-40 disabled:cursor-not-allowed" disabled>삭제</button>
                                 </div>
                             </div>
                                 <div class="flex justify-center pt-6">

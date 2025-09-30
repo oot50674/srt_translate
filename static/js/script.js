@@ -18,6 +18,7 @@ $(function () {
     const $presetSelect = $('#preset-select');
     const $savePresetBtn = $('#save-preset-btn');
     const $newPresetBtn = $('#new-preset-btn');
+    const $deletePresetBtn = $('#delete-preset-btn');
     const $thinkingBudgetInput = $('#thinking-budget');
     const $disableThinkingCheckbox = $('#disable-thinking');
     const $apiKeyInput = $('#api-key');
@@ -88,7 +89,8 @@ $(function () {
             }, 300);
         }
 
-        $openSettingsBtn.on('click', function () {
+    // [이벤트 바인딩] 설정 패널 열기 버튼 클릭
+    $openSettingsBtn.on('click', function () {
             openPanel();
             if ($apiKeyInput.length) {
                 setTimeout(() => {
@@ -97,18 +99,21 @@ $(function () {
             }
         });
 
+        // [이벤트 바인딩] 설정 패널 닫기 버튼 클릭
         if ($settingsCloseBtn.length) {
             $settingsCloseBtn.on('click', function () {
                 closePanel();
             });
         }
 
+        // [이벤트 바인딩] 오버레이 클릭 시 패널 닫기
         if ($settingsOverlay.length) {
             $settingsOverlay.on('click', function () {
                 closePanel();
             });
         }
 
+        // [이벤트 바인딩] ESC 키로 패널 닫기
         $(document).on('keydown', function (e) {
             if (panelOpen && e.key === 'Escape') {
                 closePanel();
@@ -247,6 +252,7 @@ $(function () {
         }, SAVE_DEBOUNCE_MS);
     }
 
+    // [이벤트 바인딩] API 키 저장 버튼 클릭
     if ($saveApiKeyBtn.length && $apiKeyInput.length) {
         $saveApiKeyBtn.on('click', async function () {
             const apiKeyVal = ($apiKeyInput.val() || '').trim();
@@ -295,6 +301,7 @@ $(function () {
         }
     }
 
+    // [이벤트 바인딩] SRT 텍스트 입력 시 파일 업로드 비활성화
     if ($textArea.length) {
         $textArea.on('input', function () {
             const hasText = $.trim($(this).val()) !== '';
@@ -307,6 +314,7 @@ $(function () {
         toggleFileUpload($.trim($textArea.val()) !== '');
     }
 
+    // [이벤트 바인딩] 파일 선택 버튼 클릭
     if ($selectBtn.length && $fileInput.length) {
         $selectBtn.on('click', function (e) {
             e.stopPropagation();
@@ -328,6 +336,7 @@ $(function () {
         }
     }
 
+    // [이벤트 바인딩] 파일 입력 클릭/변경
     if ($fileInput.length) {
         $fileInput.on('click', function (e) {
             // 파일 입력 클릭 이벤트가 다시 드롭존으로 버블링되어
@@ -344,6 +353,7 @@ $(function () {
         });
     }
 
+    // [이벤트 바인딩] 드롭존 클릭/드래그/드롭
     if ($dropZone.length && $fileInput.length) {
         $dropZone.on('click', function (e) {
             if (!$fileInput.prop('disabled')) {
@@ -437,7 +447,11 @@ $(function () {
             if (presetExists) {
                 $presetSelect.val(lastSelectedPreset);
                 await applyPreset(lastSelectedPreset);
+                if ($deletePresetBtn.length) $deletePresetBtn.prop('disabled', false);
             }
+        }
+        if (!$presetSelect.val() && $deletePresetBtn.length) {
+            $deletePresetBtn.prop('disabled', true);
         }
     }
 
@@ -472,19 +486,23 @@ $(function () {
         }
     }
 
+    // [이벤트 바인딩] 프리셋 선택 변경
     if ($presetSelect.length) {
         $presetSelect.on('change', function () {
             if (this.value) {
                 // 선택한 프리셋을 localStorage에 저장
                 localStorage.setItem('lastSelectedPreset', this.value);
                 applyPreset(this.value);
+                if ($deletePresetBtn.length) $deletePresetBtn.prop('disabled', false);
             } else {
                 // 프리셋 선택 해제시 저장된 프리셋 정보 삭제
                 localStorage.removeItem('lastSelectedPreset');
+                if ($deletePresetBtn.length) $deletePresetBtn.prop('disabled', true);
             }
         });
     }
 
+    // [이벤트 바인딩] 프리셋 저장 버튼 클릭
     // '저장' 버튼: 현재 선택된 프리셋이 있으면 갱신(update), 없으면 새로 만들기
     // 프리셋은 '번역 기본 파라미터'만 저장합니다.
     // 추가 설정(API 키, 모델, Thinking Budget, 컨텍스트 압축 등)은 세션/사용자 환경 설정이며 프리셋과 완전히 분리됩니다.
@@ -535,6 +553,7 @@ $(function () {
         });
     }
 
+    // [이벤트 바인딩] 프리셋 새로 만들기 버튼 클릭
     // '새로 만들기' 버튼: 항상 새 이름을 입력받아 새로운 프리셋 생성
     // 동일하게 번역 관련 3개 필드만 저장합니다.
     if ($newPresetBtn.length) {
@@ -571,42 +590,86 @@ $(function () {
 
     populatePresetOptions();
 
+    // [이벤트 바인딩] 프리셋 삭제 버튼 클릭
+    if ($deletePresetBtn && $deletePresetBtn.length) {
+        $deletePresetBtn.on('click', async function () {
+            const current = $presetSelect.val();
+            if (!current) return;
+            if (!confirm(`프리셋 "${current}" 을(를) 삭제하시겠습니까?`)) return;
+            try {
+                const res = await fetch('/api/presets/' + encodeURIComponent(current), { method: 'DELETE' });
+                if (!res.ok) throw new Error('삭제 실패');
+                localStorage.removeItem('lastSelectedPreset');
+                await populatePresetOptions();
+                if ($targetLangInput.length) $targetLangInput.val('');
+                if ($chunkSizeInput.length) $chunkSizeInput.val('');
+                if ($customPromptInput.length) $customPromptInput.val('');
+                if ($thinkingBudgetInput.length && $disableThinkingCheckbox.length) {
+                    $disableThinkingCheckbox.prop('checked', false).trigger('change');
+                    $thinkingBudgetInput.val('auto');
+                }
+                if ($deletePresetBtn.length) $deletePresetBtn.prop('disabled', true);
+                if (window.Toast && typeof window.Toast.success === 'function') {
+                    Toast.success('프리셋이 삭제되었습니다.');
+                } else if (window.Toast && typeof window.Toast.info === 'function') {
+                    Toast.info('프리셋이 삭제되었습니다.');
+                } else {
+                    alert('프리셋이 삭제되었습니다.');
+                }
+            } catch (err) {
+                console.error(err);
+                if (window.Toast && typeof window.Toast.error === 'function') {
+                    Toast.error('프리셋 삭제 실패');
+                } else {
+                    alert('프리셋 삭제 실패');
+                }
+            }
+        });
+    }
+
+    // [이벤트 바인딩] 번역 폼 제출 (submit)
     if ($form.length) {
         $form.on('submit', async function (e) {
             e.preventDefault();
+            
+            // Thinking Budget 값 처리: 체크박스 상태에 따라 문자열로 변환
             const tbValue = $thinkingBudgetInput.val().trim().toLowerCase();
             let thinking_budget_str;
             if ($disableThinkingCheckbox.is(':checked')) {
-                thinking_budget_str = '0';
+            thinking_budget_str = '0';
             } else if (tbValue === 'auto') {
-                thinking_budget_str = '-1';
+            thinking_budget_str = '-1';
             } else {
-                thinking_budget_str = $thinkingBudgetInput.val() || '';
+            thinking_budget_str = $thinkingBudgetInput.val() || '';
             }
 
+            // 번역 옵션 객체 생성
             const options = {
-                target_lang: $targetLangInput.val() || '',
-                batch_size: $chunkSizeInput.val() || '',
-                custom_prompt: $customPromptInput.val() || '',
+            target_lang: $targetLangInput.val() || '',
+            batch_size: $chunkSizeInput.val() || '',
+            custom_prompt: $customPromptInput.val() || '',
             thinking_budget: thinking_budget_str,
-            // Context compression options
+            // Context compression 옵션
             context_compression: $contextCompressionCheckbox.length ? ($contextCompressionCheckbox.is(':checked') ? '1' : '0') : '0',
             context_limit: $contextLimitInput.length ? $contextLimitInput.val() || '' : '',
-                api_key: $apiKeyInput.length ? $apiKeyInput.val() || '' : '',
-                model: $modelInput.length ? $modelInput.val().trim() : ''
+            api_key: $apiKeyInput.length ? $apiKeyInput.val() || '' : '',
+            model: $modelInput.length ? $modelInput.val().trim() : ''
             };
+            
+            // FormData 객체 생성 및 SRT 데이터 추가 (텍스트 또는 파일)
             const formData = new FormData();
             if ($textArea.length && $.trim($textArea.val()) !== '') {
-                formData.append('srt_text', $textArea.val());
+            formData.append('srt_text', $textArea.val());
             } else if ($fileInput.length && $fileInput[0].files.length > 0) {
-                for (const f of $fileInput[0].files) {
-                    formData.append('srt_files', f, f.name);
-                }
+            for (const f of $fileInput[0].files) {
+                formData.append('srt_files', f, f.name);
+            }
             } else {
-                Toast.alert('SRT 파일을 선택하거나 텍스트를 입력하세요.');
-                return;
+            Toast.alert('SRT 파일을 선택하거나 텍스트를 입력하세요.');
+            return;
             }
 
+            // FormData에 옵션 값들 추가
             formData.append('target_lang', options.target_lang);
             formData.append('batch_size', options.batch_size);
             formData.append('custom_prompt', options.custom_prompt);
@@ -616,20 +679,23 @@ $(function () {
             formData.append('api_key', options.api_key);
             formData.append('model', options.model || DEFAULT_MODEL);
 
+            // API 호출로 작업 생성
             const res = await fetch('/api/jobs', {
-                method: 'POST',
-                body: formData
+            method: 'POST',
+            body: formData
             });
             const data = await res.json();
             if (data.job_id) {
-                window.location.href = '/progress?job=' + encodeURIComponent(data.job_id);
+            // 성공 시 진행 페이지로 리다이렉트
+            window.location.href = '/progress?job=' + encodeURIComponent(data.job_id);
             } else {
-                Toast.alert(data.error || '작업 생성 실패');
+            // 실패 시 오류 메시지 표시
+            Toast.alert(data.error || '작업 생성 실패');
             }
         });
     }
 
-    // Thinking Budget 비활성화 체크박스 처리
+    // [이벤트 바인딩] Thinking Budget 비활성화 체크박스 변경
     if ($disableThinkingCheckbox.length && $thinkingBudgetInput.length) {
         $disableThinkingCheckbox.on('change', function() {
             const isDisabled = $(this).is(':checked');
@@ -681,7 +747,8 @@ $(function () {
         // 초기 적용 (config 로드 전 임시)
         syncContextInputState();
 
-        $contextCompressionCheckbox.on('change', function () {
+    // [이벤트 바인딩] Context Compression 토글 변경
+    $contextCompressionCheckbox.on('change', function () {
             const enabled = $(this).is(':checked');
             // UI 동작
             syncContextInputState();
@@ -691,7 +758,8 @@ $(function () {
         });
 
         // context-limit 변경 시 세션에 저장
-        $contextLimitInput.on('input', function () {
+    // [이벤트 바인딩] Context Limit 입력값 변경
+    $contextLimitInput.on('input', function () {
             const v = $(this).val();
             if (v === '' || isNaN(Number(v))) {
                 sessionStorage.removeItem(SESSION_KEY);
@@ -702,10 +770,12 @@ $(function () {
         });
     }
 
-    // 모델명 / RPM / context-limit 자동 저장 이벤트
+    // [이벤트 바인딩] 모델명 입력값 변경
     if ($modelInput.length) {
         $modelInput.on('input', scheduleAutoSave);
     }
+
+    // [이벤트 바인딩] RPM 입력값 변경
     if ($rpmLimitInput.length) {
         $rpmLimitInput.on('input', function () {
             const v = $(this).val();
