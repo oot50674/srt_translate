@@ -3,4 +3,5 @@
 */__pycache__
 /database.db
 /logs
+/.claude
 AGENTS.md
