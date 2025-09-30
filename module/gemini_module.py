@@ -608,6 +608,7 @@ class GeminiClient:
                 if chunk.text:
                     full_response_text.append(chunk.text)
                     full_response_combined += chunk.text  # 실시간 업데이트
+                    logger.debug(f"full_response_combined: {full_response_combined}")  # 디버그 로그
                     yield chunk.text
             
             # 전체 응답을 히스토리에 추가
