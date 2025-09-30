@@ -526,7 +526,7 @@ class GeminiClient:
             model_tokens_estimate = self._estimate_text_tokens(response.text or '')
             self._token_usage_total += prompt_tokens_estimate + model_tokens_estimate
             history_tokens = self._estimate_history_tokens()
-            token_limit = self.context_limit_tokens or '∞'
+            token_limit = self.context_limit_tokens if self.context_compression_enabled else '∞'
             logger.info(
                 "메시지 전송 완료. 히스토리 길이: %s, 요청 토큰: %s, 응답 추정 토큰: %s, 히스토리 추정 토큰: %s/%s",
                 len(self.history),
@@ -622,7 +622,7 @@ class GeminiClient:
             self._token_usage_total += prompt_tokens_estimate + model_tokens_estimate
 
             history_tokens = self._estimate_history_tokens()
-            token_limit = self.context_limit_tokens or '∞'
+            token_limit = self.context_limit_tokens if self.context_compression_enabled else '∞'
             logger.info(
                 "스트리밍 메시지 전송 완료. 히스토리 길이: %s, 요청 토큰: %s, 응답 추정 토큰: %s, 히스토리 추정 토큰: %s/%s",
                 len(self.history),
