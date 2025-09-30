@@ -88,6 +88,30 @@ def translate_srt_stream(content: str, client, target_lang: str = '한국어', b
     """SRT 텍스트를 번역하며 진행 상황을 스트림으로 제공합니다."""
     logger.info("translate_srt_stream 호출됨 - 파라미터: target_lang=%s, batch_size=%s, thinking_budget=%s",
                target_lang, batch_size, thinking_budget)
+
+    def build_translation_prompt(base_prompt: str, lang: str, entries: List[Dict[str, Any]]) -> str:
+        """번역 요청 프롬프트를 생성합니다.
+
+        Args:
+            base_prompt (str): 사용자 지정 추가 프롬프트.
+            lang (str): 목표 언어.
+            entries (List[Dict]): {index, text} 필드를 가진 자막 엔트리 목록.
+
+        Returns:
+            str: 모델에 전달할 완성된 프롬프트 문자열.
+        """
+        safe_items: List[str] = []
+        for sub in entries:
+            # 기본 방어적 접근: key 누락 시 넘어감
+            if 'index' not in sub or 'text' not in sub:
+                continue
+            # 기존 로직과 동일한 최소 escaping 유지 (쌍따옴표, 개행 정규화)
+            escaped_text = str(sub['text']).replace('"', '\"').replace('\r', '').replace('\n', '\n')
+            safe_items.append(json.dumps({"index": sub['index'], "text": escaped_text}, ensure_ascii=False))
+        batch_json = '[' + ', '.join(safe_items) + ']'
+
+        prompt_core = f"""{base_prompt}\n\n다음 자막들을 자연스러운 {lang}로 번역하세요.\n\n번역할 자막들:\n{batch_json}\n\n주의사항:\n- index는 원본과 동일하게 유지하세요\n- text만 번역하세요\n- 응답은 JSON 스키마에 정의된 형식을 정확히 따르세요\n"""
+        return prompt_core
     
     # 응답 스키마 정의
     response_schema = {
@@ -143,20 +167,7 @@ def translate_srt_stream(content: str, client, target_lang: str = '한국어', b
             escaped_text = sub["text"].replace('"', '\"').replace('\n', '\n').replace('\r', '')
             batch_items.append(json.dumps({"index": sub["index"], "text": escaped_text}))
 
-        batch_json = '[' + ', '.join(batch_items) + ']'
-
-        prompt = f"""{user_prompt}
-
-    다음 자막들을 자연스러운 {target_lang}로 번역하세요.
-
-    번역할 자막들:
-    {batch_json}
-
-    주의사항:
-    - index는 원본과 동일하게 유지하세요
-    - text만 번역하세요
-    - 응답은 JSON 스키마에 정의된 형식을 정확히 따르세요
-    """
+        prompt = build_translation_prompt(user_prompt, target_lang, batch)
 
         # 새 통합 방식: 매 배치 전에 GeminiClient에 재구성 자막 블록만 업데이트.
         # 실제 [WORK SUMMARY] 생성/압축 시점은 GeminiClient 내부 로직이 판단.
@@ -219,19 +230,7 @@ def translate_srt_stream(content: str, client, target_lang: str = '한국어', b
                     escaped_text = sub["text"].replace('"', '\"').replace('\n', '\n').replace('\r', '')
                     batch_items.append(json.dumps({"index": sub["index"], "text": escaped_text}))
 
-                batch_json = '[' + ', '.join(batch_items) + ']'
-                prompt = f"""{user_prompt}
-
-    다음 자막들을 자연스러운 {target_lang}로 번역하세요.
-
-    번역할 자막들:
-    {batch_json}
-
-    주의사항:
-    - index는 원본과 동일하게 유지하세요
-    - text만 번역하세요
-    - 응답은 JSON 스키마에 정의된 형식을 정확히 따르세요
-    """
+                prompt = build_translation_prompt(user_prompt, target_lang, current_batch_to_translate)
 
             try:
                 buffer = ""
@@ -349,18 +348,13 @@ def translate_srt_stream(content: str, client, target_lang: str = '한국어', b
                         original_batch_items.append(json.dumps({"index": sub["index"], "text": escaped_text}))
 
                     original_batch_json = '[' + ', '.join(original_batch_items) + ']'
-                    complete_prompt = f"""{user_prompt}
-
-    다음 자막들을 자연스러운 {target_lang}로 번역하세요.
-
-    번역할 자막들:
-    {original_batch_json}
-
-    주의사항:
-    - index는 원본과 동일하게 유지하세요
-    - text만 번역하세요
-    - 응답은 JSON 스키마에 정의된 형식을 정확히 따르세요
-    """
+                    # 재구성 시에도 동일한 helper 사용 (원본 배치 기준)
+                    # original_batch_items 구성은 위에서 유지
+                    original_entries_for_prompt = [
+                        { 'index': original_sub_map[idx]['index'], 'text': original_sub_map[idx]['text'] }
+                        for idx in sorted(original_sub_map.keys())
+                    ]
+                    complete_prompt = build_translation_prompt(user_prompt, target_lang, original_entries_for_prompt)
 
                     # 전체 배치의 완전한 JSON 응답 재구성
                     complete_translations = []
