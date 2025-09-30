@@ -122,10 +122,16 @@ class GeminiClient:
                 'top_p': 0.9,
                 'top_k': 40,
                 'safety_settings': safety_settings,
-                'thinking_config': types.ThinkingConfig(
-                    thinking_budget=thinking_budget,
-                ),
             }
+
+            # thinking_budget이 None이 아닌 경우에만 thinking_config 추가
+            if thinking_budget is not None:
+                default_generation_config['thinking_config'] = types.ThinkingConfig(
+                    thinking_budget=thinking_budget,
+                )
+                logger.info(f"Thinking Budget 설정: {thinking_budget}")
+            else:
+                logger.info("Thinking Budget이 auto로 설정되었습니다 (thinking_config 미사용)")
             
             # JSON 스키마 설정이 있으면 추가
             if response_schema is not None:
@@ -155,7 +161,10 @@ class GeminiClient:
             
             logger.info(f"대화형 Gemini 클라이언트가 초기화되었습니다. 모델: {self.model}")
             logger.info(f"RPM 제한: {self.rpm_limit}")
-            logger.info(f"Thinking Budget: {thinking_budget}")
+            if thinking_budget is None:
+                logger.info("Thinking Budget: auto (자동)")
+            else:
+                logger.info(f"Thinking Budget: {thinking_budget}")
             if response_schema:
                 logger.info(f"JSON 스키마 모드가 활성화되었습니다.")
             logger.info(f"생성 설정: {self.generation_config}")

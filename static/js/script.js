@@ -454,12 +454,16 @@ $(function () {
         // thinking_budget 프리셋 적용 (checkbox + input 연계)
         if ($thinkingBudgetInput.length && $disableThinkingCheckbox.length) {
             if (p.hasOwnProperty('thinking_budget') && p.thinking_budget !== null && p.thinking_budget !== undefined) {
-                const tb = parseInt(p.thinking_budget, 10);
-                if (!isNaN(tb)) {
-                    if (tb === 0) {
-                        $disableThinkingCheckbox.prop('checked', true).trigger('change');
-                        $thinkingBudgetInput.val('');
-                    } else {
+                const tbValue = String(p.thinking_budget).toLowerCase();
+                if (tbValue === '0' || tbValue === '') {
+                    $disableThinkingCheckbox.prop('checked', true).trigger('change');
+                    $thinkingBudgetInput.val('');
+                } else if (tbValue === '-1' || tbValue === 'auto') {
+                    $disableThinkingCheckbox.prop('checked', false).trigger('change');
+                    $thinkingBudgetInput.val('auto');
+                } else {
+                    const tb = parseInt(p.thinking_budget, 10);
+                    if (!isNaN(tb)) {
                         $disableThinkingCheckbox.prop('checked', false).trigger('change');
                         $thinkingBudgetInput.val(String(tb));
                     }
@@ -487,11 +491,21 @@ $(function () {
     if ($savePresetBtn.length) {
         $savePresetBtn.on('click', async function () {
             const current = $presetSelect.length ? $presetSelect.val() : null;
+            const tbValue = $thinkingBudgetInput.val().trim().toLowerCase();
+            let thinking_budget_value;
+            if ($disableThinkingCheckbox.is(':checked')) {
+                thinking_budget_value = 0;
+            } else if (tbValue === 'auto') {
+                thinking_budget_value = -1;
+            } else {
+                thinking_budget_value = tbValue || '';
+            }
+
             const preset = {
                 target_lang: $targetLangInput.val() || '',
                 batch_size: $chunkSizeInput.val() || '',
                 custom_prompt: $customPromptInput.val() || '',
-                thinking_budget: $disableThinkingCheckbox.is(':checked') ? 0 : ($thinkingBudgetInput.val() || '')
+                thinking_budget: thinking_budget_value
                 // NOTE: 추가 설정 필드는 절대 프리셋에 포함하지 않습니다.
             };
 
@@ -527,11 +541,21 @@ $(function () {
         $newPresetBtn.on('click', async function () {
             const name = prompt('새 프리셋 이름을 입력하세요');
             if (!name) return;
+            const tbValue = $thinkingBudgetInput.val().trim().toLowerCase();
+            let thinking_budget_value;
+            if ($disableThinkingCheckbox.is(':checked')) {
+                thinking_budget_value = 0;
+            } else if (tbValue === 'auto') {
+                thinking_budget_value = -1;
+            } else {
+                thinking_budget_value = tbValue || '';
+            }
+
             const preset = {
                 target_lang: $targetLangInput.val() || '',
                 batch_size: $chunkSizeInput.val() || '',
                 custom_prompt: $customPromptInput.val() || '',
-                thinking_budget: $disableThinkingCheckbox.is(':checked') ? 0 : ($thinkingBudgetInput.val() || '')
+                thinking_budget: thinking_budget_value
                 // 추가 설정 필드 제외
             };
                 try {
@@ -550,11 +574,21 @@ $(function () {
     if ($form.length) {
         $form.on('submit', async function (e) {
             e.preventDefault();
+            const tbValue = $thinkingBudgetInput.val().trim().toLowerCase();
+            let thinking_budget_str;
+            if ($disableThinkingCheckbox.is(':checked')) {
+                thinking_budget_str = '0';
+            } else if (tbValue === 'auto') {
+                thinking_budget_str = '-1';
+            } else {
+                thinking_budget_str = $thinkingBudgetInput.val() || '';
+            }
+
             const options = {
                 target_lang: $targetLangInput.val() || '',
                 batch_size: $chunkSizeInput.val() || '',
                 custom_prompt: $customPromptInput.val() || '',
-            thinking_budget: $disableThinkingCheckbox.is(':checked') ? '0' : $thinkingBudgetInput.val() || '',
+            thinking_budget: thinking_budget_str,
             // Context compression options
             context_compression: $contextCompressionCheckbox.length ? ($contextCompressionCheckbox.is(':checked') ? '1' : '0') : '0',
             context_limit: $contextLimitInput.length ? $contextLimitInput.val() || '' : '',

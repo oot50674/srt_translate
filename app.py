@@ -524,16 +524,28 @@ def upload_srt():
     except (ValueError, TypeError):
         logger.warning("thinking_budget 파라미터 변환 실패, 기본값 8192 사용: %s", thinking_budget)
         thinking_budget_val = 8192
-    
+
+    # -1은 auto를 의미하며, thinking_config를 설정하지 않음 (Gemini가 자동 결정)
+    if thinking_budget_val == -1:
+        logger.info("Thinking Budget이 auto로 설정되었습니다. Gemini가 자동으로 결정합니다.")
+        generation_config_extra = {
+            'max_output_tokens': 122880  # 120k 토큰
+        }
+    else:
+        generation_config_extra = {
+            'max_output_tokens': 122880,  # 120k 토큰
+            'thinking_config': {'thinking_budget': thinking_budget_val} if thinking_budget_val > 0 else None
+        }
+        if generation_config_extra['thinking_config'] is None:
+            del generation_config_extra['thinking_config']
+
     try:
         shared_client = GeminiClient(
             model=model_name,
             api_key=api_key if api_key else None,
-            thinking_budget=thinking_budget_val,
+            thinking_budget=thinking_budget_val if thinking_budget_val != -1 else None,
             rpm_limit=int(get_config_value('rpm_limit', 9) or 9),
-            generation_config={
-                'max_output_tokens': 122880  # 120k 토큰
-            },
+            generation_config=generation_config_extra,
             context_compression_enabled=context_compression_enabled,
             context_limit_tokens=context_limit,
             context_keep_recent=DEFAULT_CONTEXT_KEEP_RECENT,
@@ -546,7 +558,9 @@ def upload_srt():
             except Exception:
                 pass
         return jsonify({'error': str(exc)}), 400
-    if thinking_budget_val <= 0:
+    if thinking_budget_val == -1:
+        logger.info("Thinking Budget: auto (Gemini 자동 결정)")
+    elif thinking_budget_val <= 0:
         logger.info("Thinking 기능 비활성화됨 (thinking_budget=0)")
     else:
         logger.info(f"Thinking Budget 설정: {thinking_budget_val}")

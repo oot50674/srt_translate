@@ -125,7 +125,13 @@
                                                 <label for="disable-thinking" class="text-xs text-slate-600">비활성화</label>
                                             </div>
                                         </div>
-                                        <input type="number" id="thinking-budget" class="form-input w-full rounded-md border-slate-300" min="512" step="1" value="2048" placeholder="예: 8192" />
+                                        <input type="text" id="thinking-budget" class="form-input w-full rounded-md border-slate-300" value="2048" placeholder="예: 8192 또는 auto" list="thinking-budget-options" />
+                                        <datalist id="thinking-budget-options">
+                                            <option value="auto">
+                                            <option value="512">
+                                            <option value="1024">
+                                            <option value="2048">
+                                        </datalist>
                                     </div>
                                 </div>
                                 <div>
