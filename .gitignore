@@ -3,6 +3,7 @@
 */__pycache__
 /database.db
 /logs
+/docs
 /.claude
 AGENTS.md
 *.pyc
