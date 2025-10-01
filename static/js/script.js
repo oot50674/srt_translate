@@ -38,21 +38,11 @@ $(function () {
     let missingApiKey = String($('body').data('missingApiKey')).toLowerCase() === 'true';
 
     if ($modelInput.length) {
-        const storedModel = localStorage.getItem('modelName');
-        $modelInput.val(storedModel || DEFAULT_MODEL);
-
-        $modelInput.on('input', function () {
-            const value = $(this).val().trim();
-            if (value) {
-                localStorage.setItem('modelName', value);
-            } else {
-                localStorage.removeItem('modelName');
-            }
-        });
+        $modelInput.val(DEFAULT_MODEL);
     }
 
     if ($settingsPanel.length && $openSettingsBtn.length) {
-        let panelOpen = localStorage.getItem(SETTINGS_PANEL_STORAGE_KEY) === 'true';
+        let panelOpen = false;
         if (missingApiKey) {
             panelOpen = true;
         }
@@ -64,11 +54,6 @@ $(function () {
             $('body').toggleClass('overflow-hidden', isOpen);
             $openSettingsBtn.attr('aria-expanded', String(isOpen));
             $settingsPanel.attr('aria-hidden', String(!isOpen));
-            if (isOpen) {
-                localStorage.setItem(SETTINGS_PANEL_STORAGE_KEY, 'true');
-            } else {
-                localStorage.removeItem(SETTINGS_PANEL_STORAGE_KEY);
-            }
         }
 
         function openPanel() {
@@ -440,16 +425,6 @@ $(function () {
             $('<option>').val(p.name).text(p.name).appendTo($presetSelect);
         });
         
-        // 마지막에 선택한 프리셋 자동 적용
-        const lastSelectedPreset = localStorage.getItem('lastSelectedPreset');
-        if (lastSelectedPreset) {
-            const presetExists = presets.some(p => p.name === lastSelectedPreset);
-            if (presetExists) {
-                $presetSelect.val(lastSelectedPreset);
-                await applyPreset(lastSelectedPreset);
-                if ($deletePresetBtn.length) $deletePresetBtn.prop('disabled', false);
-            }
-        }
         if (!$presetSelect.val() && $deletePresetBtn.length) {
             $deletePresetBtn.prop('disabled', true);
         }
@@ -490,13 +465,9 @@ $(function () {
     if ($presetSelect.length) {
         $presetSelect.on('change', function () {
             if (this.value) {
-                // 선택한 프리셋을 localStorage에 저장
-                localStorage.setItem('lastSelectedPreset', this.value);
                 applyPreset(this.value);
                 if ($deletePresetBtn.length) $deletePresetBtn.prop('disabled', false);
             } else {
-                // 프리셋 선택 해제시 저장된 프리셋 정보 삭제
-                localStorage.removeItem('lastSelectedPreset');
                 if ($deletePresetBtn.length) $deletePresetBtn.prop('disabled', true);
             }
         });
@@ -599,7 +570,6 @@ $(function () {
             try {
                 const res = await fetch('/api/presets/' + encodeURIComponent(current), { method: 'DELETE' });
                 if (!res.ok) throw new Error('삭제 실패');
-                localStorage.removeItem('lastSelectedPreset');
                 await populatePresetOptions();
                 if ($targetLangInput.length) $targetLangInput.val('');
                 if ($chunkSizeInput.length) $chunkSizeInput.val('');
@@ -731,12 +701,6 @@ $(function () {
     }
 
     if ($contextCompressionCheckbox.length && $contextLimitInput.length) {
-        // 초기 상태: 로컬스토리지에 저장된 값이 있으면 체크박스에 적용
-        const storedCompression = localStorage.getItem('contextCompressionEnabled');
-        if (storedCompression !== null) {
-            $contextCompressionCheckbox.prop('checked', storedCompression === 'true');
-        }
-
         // context-limit 값은 세션 범위로 저장/복원
         const SESSION_KEY = 'contextLimit';
         const storedLimit = sessionStorage.getItem(SESSION_KEY);
@@ -753,7 +717,6 @@ $(function () {
             // UI 동작
             syncContextInputState();
             // 사용자 설정 로컬 저장 (백엔드와 동기화됨)
-            localStorage.setItem('contextCompressionEnabled', enabled ? 'true' : 'false');
             scheduleAutoSave();
         });
 
