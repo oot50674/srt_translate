@@ -5,7 +5,7 @@ from typing import Iterator, Dict, Any, Optional, List, Union, cast
 import logging
 from google import genai
 from google.genai import types
-from google.api_core import exceptions as google_exceptions
+from google.genai import errors
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
@@ -498,31 +498,31 @@ class GeminiClient:
         try:
             # 이번 요청을 위한 설정 준비
             request_config = self.generation_config.copy()
-            
+
             # 임시 스키마 설정이 있으면 적용
             if response_schema is not None:
                 request_config['response_schema'] = response_schema
                 if response_mime_type is None:
                     response_mime_type = "application/json"
-            
+
             if response_mime_type is not None:
                 request_config['response_mime_type'] = response_mime_type
-            
+
             # 전체 히스토리를 contents로 전달
-            config_payload = cast(types.GenerateContentConfigDict, request_config)
+            config_payload = types.GenerateContentConfig(**request_config)
             response = self.client.models.generate_content(
                 model=model or self.model,
                 contents=self.history,
                 config=config_payload
             )
-            
+
             # 모델 응답을 히스토리에 추가
             model_response = {
                 'role': 'model',
                 'parts': [{'text': response.text}]
             }
             self.history.append(model_response)
-            
+
             model_tokens_estimate = self._estimate_text_tokens(response.text or '')
             self._token_usage_total += prompt_tokens_estimate + model_tokens_estimate
             history_tokens = self._estimate_history_tokens()
@@ -536,8 +536,8 @@ class GeminiClient:
                 token_limit,
             )
             return response.text or ""
-            
-        except google_exceptions.GoogleAPICallError as e:
+
+        except errors.APIError as e:
             # 오류 발생 시 추가한 사용자 메시지 롤백
             self.history.pop()
             logger.error(f"Google API 호출 오류: {e}")
@@ -583,24 +583,24 @@ class GeminiClient:
         try:
             # 이번 요청을 위한 설정 준비
             request_config = self.generation_config.copy()
-            
+
             # 임시 스키마 설정이 있으면 적용
             if response_schema is not None:
                 request_config['response_schema'] = response_schema
                 if response_mime_type is None:
                     response_mime_type = "application/json"
-            
+
             if response_mime_type is not None:
                 request_config['response_mime_type'] = response_mime_type
-            
+
             # 전체 히스토리를 contents로 전달하여 스트리밍
-            config_payload = cast(types.GenerateContentConfigDict, request_config)
+            config_payload = types.GenerateContentConfig(**request_config)
             stream = self.client.models.generate_content_stream(
                 model=model or self.model,
                 contents=self.history,
                 config=config_payload
             )
-            
+
             # 스트리밍 응답 수집
             full_response_text = []
             full_response_combined = ""  # 초기화
@@ -610,7 +610,7 @@ class GeminiClient:
                     full_response_combined += chunk.text  # 실시간 업데이트
                     logger.debug(f"full_response_combined: {full_response_combined}")  # 디버그 로그
                     yield chunk.text
-            
+
             # 전체 응답을 히스토리에 추가
             model_response = {
                 'role': 'model',
@@ -632,7 +632,7 @@ class GeminiClient:
                 token_limit,
             )
 
-        except google_exceptions.GoogleAPICallError as e:
+        except errors.APIError as e:
             # 오류 발생 시 추가한 사용자 메시지 롤백
             self.history.pop()
             logger.error(f"Google API 호출 오류(스트리밍): {e}")
