@@ -34,31 +34,38 @@ Flask를 이용한 번역 서비스 웹 애플리케이션입니다
 
 ## 설치 방법
 
-1. 가상환경 활성화:
-```bash
-.venv\Scripts\activate
-```
+## 가상환경 설치 가이드
 
-2. 의존성 설치:
-```bash
-pip install -r requirements.txt
-```
+1. 가상환경 생성:
+  ```bash
+  python -m venv .venv
+  ```
 
-3. 애플리케이션 실행:
-```bash
-python app.py
-```
+2. 가상환경 활성화:
+  ```bash
+  .venv\Scripts\activate
+  ```
 
-4. 웹 브라우저에서 애플리케이션 접속:
-```
-http://127.0.0.1:5000
-```
+3. 의존성 설치:
+  ```bash
+  pip install -r requirements.txt
+  ```
 
-## bat 파일 사용한 설치
+4. 애플리케이션 실행:
+  ```bash
+  python app.py
+  ```
 
-1. 코드를 clone 혹은 다운로드 받은 후 `install_app.bat` 파일 실행 → 가상환경 세팅 후 프로젝트 실행.
+5. 웹 브라우저에서 애플리케이션 접속:
+  ```
+  http://127.0.0.1:5000
+  ```
 
-2. 설치 완료 후에는 `start_app.bat`으로 실핼.
+## 원클릭 설치&실행
+
+1. 프로젝트를 clone 혹은 코드를 다운로드 받은 후 `install_app.bat` 파일 실행 → 가상환경 세팅 후 프로젝트 실행.
+
+2. 설치 완료 후에는 `start_app.bat`으로 실행.
 
 ## 개발 환경
 
