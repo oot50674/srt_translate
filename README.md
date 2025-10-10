@@ -54,6 +54,12 @@ python app.py
 http://127.0.0.1:5000
 ```
 
+## bat 파일 사용한 설치
+
+1. 코드를 clone 혹은 다운로드 받은 후 `install_app.bat` 파일 실행 → 가상환경 세팅 후 프로젝트 실행.
+
+2. 설치 완료 후에는 `start_app.bat`으로 실핼.
+
 ## 개발 환경
 
 - Flask 3.0.2
