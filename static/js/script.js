@@ -32,10 +32,33 @@ $(function () {
     const $contextLimitInput = $('#context-limit');
     const $rpmLimitInput = $('#rpm-limit');
     const SETTINGS_PANEL_STORAGE_KEY = 'settingsPanelOpen';
+    const LAST_PRESET_COOKIE_KEY = 'lastUsedPreset';
     const $configSaveIndicator = $('#config-save-indicator');
     const $missingApiKeyAlert = $('#missing-api-key-alert');
     const $panelMissingApiKeyAlert = $('#panel-missing-api-key-alert');
     let missingApiKey = String($('body').data('missingApiKey')).toLowerCase() === 'true';
+
+    // 쿠키 헬퍼 함수들
+    function setCookie(name, value, days = 365) {
+        const expires = new Date();
+        expires.setTime(expires.getTime() + days * 24 * 60 * 60 * 1000);
+        document.cookie = name + '=' + encodeURIComponent(value) + ';expires=' + expires.toUTCString() + ';path=/';
+    }
+
+    function getCookie(name) {
+        const nameEQ = name + '=';
+        const ca = document.cookie.split(';');
+        for (let i = 0; i < ca.length; i++) {
+            let c = ca[i];
+            while (c.charAt(0) === ' ') c = c.substring(1, c.length);
+            if (c.indexOf(nameEQ) === 0) return decodeURIComponent(c.substring(nameEQ.length, c.length));
+        }
+        return null;
+    }
+
+    function deleteCookie(name) {
+        document.cookie = name + '=;expires=Thu, 01 Jan 1970 00:00:01 GMT;path=/';
+    }
 
     if ($modelInput.length) {
         $modelInput.val(DEFAULT_MODEL);
@@ -424,9 +447,18 @@ $(function () {
         $.each(presets, function (_, p) {
             $('<option>').val(p.name).text(p.name).appendTo($presetSelect);
         });
-        
-        if (!$presetSelect.val() && $deletePresetBtn.length) {
-            $deletePresetBtn.prop('disabled', true);
+
+        // 쿠키에서 마지막 사용한 프리셋 불러오기 및 적용
+        const lastPreset = getCookie(LAST_PRESET_COOKIE_KEY);
+        if (lastPreset && presets.some(p => p.name === lastPreset)) {
+            $presetSelect.val(lastPreset);
+            // 프리셋 적용 (UI에 반영)
+            await applyPreset(lastPreset);
+            if ($deletePresetBtn.length) $deletePresetBtn.prop('disabled', false);
+        } else {
+            if (!$presetSelect.val() && $deletePresetBtn.length) {
+                $deletePresetBtn.prop('disabled', true);
+            }
         }
     }
 
@@ -466,8 +498,12 @@ $(function () {
         $presetSelect.on('change', function () {
             if (this.value) {
                 applyPreset(this.value);
+                // 선택한 프리셋을 쿠키에 저장
+                setCookie(LAST_PRESET_COOKIE_KEY, this.value);
                 if ($deletePresetBtn.length) $deletePresetBtn.prop('disabled', false);
             } else {
+                // 프리셋 선택 해제 시 쿠키에서도 제거
+                deleteCookie(LAST_PRESET_COOKIE_KEY);
                 if ($deletePresetBtn.length) $deletePresetBtn.prop('disabled', true);
             }
         });
@@ -571,6 +607,11 @@ $(function () {
                 const res = await fetch('/api/presets/' + encodeURIComponent(current), { method: 'DELETE' });
                 if (!res.ok) throw new Error('삭제 실패');
                 await populatePresetOptions();
+                // 삭제된 프리셋이 마지막 사용한 프리셋이었으면 쿠키에서도 제거
+                const lastPreset = getCookie(LAST_PRESET_COOKIE_KEY);
+                if (lastPreset === current) {
+                    deleteCookie(LAST_PRESET_COOKIE_KEY);
+                }
                 if ($targetLangInput.length) $targetLangInput.val('');
                 if ($chunkSizeInput.length) $chunkSizeInput.val('');
                 if ($customPromptInput.length) $customPromptInput.val('');
