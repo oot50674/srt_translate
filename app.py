@@ -39,10 +39,6 @@ DEFAULT_MODEL = "gemini-2.5-flash"
 DEFAULT_CONTEXT_KEEP_RECENT = 50  # 히스토리 재구성 시 유지할 최근 자막 엔트리 수
 HISTORY_LOG_DIR = os.path.join(BASE_DIR, 'logs')
 
-# 업로드된 파일과 옵션을 임시로 보관하는 작업 저장소 (DB로 대체됨)
-# pending_jobs: dict[str, dict] = {}
-
-
 def save_api_key_to_env(api_key: str) -> None:
     """사용자가 입력한 API 키를 .env(GOOGLE_API_KEY)와 환경변수에 저장합니다."""
     api_key = (api_key or '').strip()
