@@ -7,6 +7,7 @@ import logging
 from google import genai
 from google.genai import types
 from google.genai import errors
+from dotenv import load_dotenv
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
@@ -51,10 +52,13 @@ class GeminiClient:
         Raises:
             ValueError: API 키를 찾을 수 없는 경우.
         """
+        # .env 파일에서 환경변수 로드
+        load_dotenv()
+
         # API 키 설정 - 전달된 값을 우선 사용하고, 없으면 환경변수로 대체
         if api_key:
             api_key = api_key.strip()
-        
+
         if not api_key:
             api_key = os.getenv("GOOGLE_API_KEY")
             if not api_key:
@@ -1275,133 +1279,3 @@ class GeminiClient:
             self.generation_config.pop('response_mime_type', None)
             self.default_response_mime_type = None
 
-    def prepare_image_parts(
-        self,
-        image_paths: Union[str, os.PathLike[str], Sequence[Union[str, os.PathLike[str]]]],
-    ) -> List[Dict[str, Any]]:
-        """
-        이미지 파일을 업로드하고 file_data 파트 목록을 반환합니다.
-        """
-        if isinstance(image_paths, (str, os.PathLike)):
-            normalized_paths = [os.fspath(image_paths)]
-        else:
-            normalized_paths = [os.fspath(path) for path in image_paths]
-
-        normalized_paths = [path for path in normalized_paths if path]
-        if not normalized_paths:
-            raise ValueError("image_paths는 비어 있을 수 없습니다.")
-
-        parts: List[Dict[str, Any]] = []
-        for path in normalized_paths:
-            if not os.path.exists(path):
-                logger.error("이미지 파일을 찾을 수 없습니다: %s", path)
-                raise FileNotFoundError(f"이미지 파일을 찾을 수 없습니다: {path}")
-
-            logger.info("이미지 업로드 준비: %s", path)
-            upload_config = types.UploadFileConfig(displayName=os.path.basename(path))
-            uploaded = self.client.files.upload(file=path, config=upload_config)
-            file_uri = getattr(uploaded, "uri", None) or getattr(uploaded, "file_uri", None)
-            mime_type = getattr(uploaded, "mime_type", None) or getattr(uploaded, "mimeType", None)
-            if not file_uri or not mime_type:
-                logger.error("업로드된 파일 메타데이터를 해석하지 못했습니다: %s", uploaded)
-                raise RuntimeError(f"업로드된 파일 메타데이터를 해석하지 못했습니다: {uploaded!r}")
-
-            parts.append({"file_data": {"file_uri": file_uri, "mime_type": mime_type}})
-
-        return parts
-
-    def send_image_prompt(
-        self,
-        image_paths: Union[str, os.PathLike[str], Sequence[Union[str, os.PathLike[str]]]],
-        *,
-        prompt: str = "각 이미지에 대한 설명을 작성해 주세요.",
-        model: Optional[str] = None,
-    ) -> str:
-        """
-        하나 이상의 이미지 파일을 업로드하고, 프롬프트와 함께 멀티모달 요청을 수행합니다.
-
-        Args:
-            image_paths (str | os.PathLike | Sequence[str | os.PathLike]):
-                업로드할 이미지 경로 또는 경로 리스트.
-            prompt (str): 이미지에 대해 모델이 응답할 지시문.
-            model (str, optional): 사용할 모델. 지정하지 않으면 기본 모델 사용.
-
-        Returns:
-            str: 모델의 응답 텍스트.
-
-        Raises:
-            FileNotFoundError: 이미지 경로가 존재하지 않을 때.
-            ValueError: 이미지 경로 목록이 비어 있을 때.
-            google_exceptions.GoogleAPICallError: API 호출에 실패한 경우.
-            Exception: 그 외 예상치 못한 오류가 발생한 경우.
-        """
-        parts = self.prepare_image_parts(image_paths)
-
-        self._prepare_history_for_new_message(prompt or "")
-        self._check_rpm_limit()
-
-        if prompt:
-            parts.append({"text": prompt})
-
-        user_message = {"role": "user", "parts": parts}
-        self.history.append(user_message)
-
-        prompt_tokens_estimate = self._estimate_history_tokens()
-
-        try:
-            request_config = self.generation_config.copy()
-            config_payload = types.GenerateContentConfig(**request_config)
-            response = self.client.models.generate_content(
-                model=model or self.model,
-                contents=self.history,
-                config=config_payload,
-            )
-
-            response_text_raw = getattr(response, 'text', None)
-            response_text = (response_text_raw or "").strip()
-            raw_model_response = self._message_from_response(response, fallback_text=response_text)
-            model_response = self._log_function_calls(raw_model_response)
-            if model_response is not None:
-                self.history.append(model_response)
-
-            joined_model_text = " ".join(
-                filter(
-                    None,
-                    (
-                        self._part_to_text_repr(part, assume_normalized=True)
-                        for part in (
-                            (model_response or raw_model_response).get('parts', [])
-                            if (model_response or raw_model_response) else []
-                        )
-                    ),
-                )
-            )
-            model_tokens_estimate = self._estimate_text_tokens(joined_model_text)
-            self._token_usage_total += prompt_tokens_estimate + model_tokens_estimate
-            history_tokens = self._estimate_history_tokens()
-            token_limit = self.context_limit_tokens if self.context_compression_enabled else '∞'
-            logger.info(
-                "이미지 프롬프트 전송 완료. 업로드 이미지 수: %s, 요청 토큰: %s, 응답 추정 토큰: %s, 히스토리 추정 토큰: %s/%s",
-                len(parts) - (1 if prompt else 0),
-                prompt_tokens_estimate,
-                model_tokens_estimate,
-                history_tokens,
-                token_limit,
-            )
-            if response_text:
-                return response_text
-            fallback_source = model_response or raw_model_response
-            for part in (fallback_source.get('parts', []) if fallback_source else []):
-                candidate_text = part.get('text') if isinstance(part, dict) else None
-                if candidate_text:
-                    return candidate_text
-            return ""
-
-        except errors.APIError as e:
-            self.history.pop()
-            logger.error("Google API 호출 오류(이미지 프롬프트): %s", e)
-            raise
-        except Exception as e:
-            self.history.pop()
-            logger.error("이미지 프롬프트 처리 중 오류: %s", e)
-            raise
