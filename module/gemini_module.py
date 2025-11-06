@@ -1,8 +1,8 @@
 import os
 import time
-import copy
+import json
 from collections import deque
-from typing import Iterator, Dict, Any, Optional, List, Union, Sequence, cast, Set, Tuple
+from typing import Iterator, Dict, Any, Optional, List, Union, Sequence, cast
 import logging
 from google import genai
 from google.genai import types
@@ -178,6 +178,295 @@ class GeminiClient:
             logger.error(f"Gemini 클라이언트 초기화 중 오류 발생: {e}")
             raise
 
+    def _clean_structure(self, value: Any) -> Any:
+        """SDK 객체를 직렬화 가능한 형태로 정리합니다."""
+        if value is None:
+            return None
+        if isinstance(value, dict):
+            cleaned_dict: Dict[str, Any] = {}
+            for key, val in value.items():
+                cleaned_val = self._clean_structure(val)
+                if cleaned_val is not None:
+                    cleaned_dict[key] = cleaned_val
+            return cleaned_dict
+        if isinstance(value, (list, tuple)):
+            cleaned_list: List[Any] = []
+            for item in value:
+                cleaned_item = self._clean_structure(item)
+                if cleaned_item is not None:
+                    cleaned_list.append(cleaned_item)
+            return cleaned_list
+        if hasattr(value, "to_dict"):
+            try:
+                return self._clean_structure(value.to_dict())
+            except Exception:
+                pass
+        if hasattr(value, "__dict__") and not isinstance(value, (str, bytes, int, float, bool)):
+            try:
+                public_items = {
+                    key: val for key, val in vars(value).items()
+                    if not key.startswith("_")
+                }
+                return self._clean_structure(public_items)
+            except Exception:
+                pass
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="ignore")
+        return value
+
+    def _normalize_part(self, part: Any) -> Dict[str, Any]:
+        """Part 객체를 Gemini API가 재사용할 수 있는 dict 형식으로 변환합니다."""
+        key_map = {
+            'functionCall': 'function_call',
+            'functionResponse': 'function_response',
+            'inlineData': 'inline_data',
+            'fileData': 'file_data',
+            'codeExecutionResult': 'code_execution_result',
+            'mimeType': 'mime_type',
+            'videoMetadata': 'video_metadata',
+        }
+
+        if isinstance(part, dict):
+            normalized: Dict[str, Any] = {}
+            for key, value in part.items():
+                mapped_key = key_map.get(key, key)
+                cleaned = self._clean_structure(value)
+                if cleaned is None:
+                    continue
+                if mapped_key == 'text':
+                    normalized[mapped_key] = str(cleaned)
+                else:
+                    normalized[mapped_key] = cleaned
+            if not normalized:
+                normalized['text'] = ''
+            return normalized
+
+        if hasattr(part, "to_dict"):
+            try:
+                part_dict = part.to_dict()
+            except Exception:
+                part_dict = None
+            if isinstance(part_dict, dict):
+                return self._normalize_part(part_dict)
+
+        normalized: Dict[str, Any] = {}
+        attr_map = {
+            'text': 'text',
+            'function_call': 'function_call',
+            'function_response': 'function_response',
+            'functionResponse': 'function_response',
+            'inline_data': 'inline_data',
+            'inlineData': 'inline_data',
+            'file_data': 'file_data',
+            'fileData': 'file_data',
+            'executable_code': 'executable_code',
+            'executableCode': 'executable_code',
+            'code_execution_result': 'code_execution_result',
+            'codeExecutionResult': 'code_execution_result',
+            'mime_type': 'mime_type',
+            'mimeType': 'mime_type',
+            'media': 'media',
+            'audio': 'audio',
+            'video_metadata': 'video_metadata',
+            'videoMetadata': 'video_metadata',
+        }
+        for attr, normalized_key in attr_map.items():
+            if not hasattr(part, attr):
+                continue
+            value = getattr(part, attr)
+            cleaned = self._clean_structure(value)
+            if cleaned is None:
+                continue
+            if normalized_key == 'text':
+                normalized['text'] = str(cleaned)
+            else:
+                normalized[normalized_key] = cleaned
+
+        if not normalized:
+            text = getattr(part, 'text', None)
+            normalized['text'] = '' if text is None else str(text)
+
+        return normalized
+
+    def _part_to_text_repr(self, part: Any, *, assume_normalized: bool = False) -> str:
+        """토큰 계산 및 요약용 텍스트 표현을 생성합니다."""
+        normalized = part if assume_normalized else self._normalize_part(part)
+        if not isinstance(normalized, dict):
+            return ''
+
+        text = normalized.get('text')
+        if isinstance(text, str) and text.strip():
+            return text
+
+        if 'function_call' in normalized:
+            fc = normalized.get('function_call') or {}
+            name = fc.get('name') or ''
+            args = fc.get('args')
+            if isinstance(args, (dict, list)):
+                args_repr = json.dumps(args, ensure_ascii=False, sort_keys=True)
+            else:
+                args_repr = '' if args is None else str(args)
+            return f"[FUNCTION_CALL] name={name} args={args_repr}"
+
+        if 'function_response' in normalized:
+            fr = normalized.get('function_response') or {}
+            name = fr.get('name') or ''
+            response_payload = fr.get('response')
+            if isinstance(response_payload, (dict, list)):
+                payload_repr = json.dumps(response_payload, ensure_ascii=False)
+            else:
+                payload_repr = '' if response_payload is None else str(response_payload)
+            return f"[FUNCTION_RESPONSE] name={name} payload={payload_repr}"
+
+        if 'file_data' in normalized:
+            fd = normalized.get('file_data') or {}
+            uri = fd.get('file_uri') or fd.get('uri') or 'unknown'
+            mime = fd.get('mime_type') or fd.get('mimeType') or 'unknown'
+            return f"[FILE_DATA] uri={uri} mime={mime}"
+
+        if 'inline_data' in normalized:
+            inline = normalized.get('inline_data') or {}
+            mime = inline.get('mime_type') or inline.get('mimeType') or 'unknown'
+            size = inline.get('size_bytes') or inline.get('sizeBytes')
+            size_repr = f" size={size}" if size is not None else ""
+            return f"[INLINE_DATA] mime={mime}{size_repr}"
+
+        if 'executable_code' in normalized:
+            code_meta = normalized.get('executable_code') or {}
+            language = code_meta.get('language') or 'unknown'
+            return f"[EXECUTABLE_CODE] language={language}"
+
+        if 'code_execution_result' in normalized:
+            result_meta = normalized.get('code_execution_result') or {}
+            status = result_meta.get('status') or result_meta.get('outcome') or 'unknown'
+            return f"[CODE_RESULT] status={status}"
+
+        try:
+            return json.dumps(normalized, ensure_ascii=False)
+        except Exception:
+            return str(normalized)
+
+    def _message_from_content(self, content: Any, fallback_text: str = "") -> Dict[str, Any]:
+        """SDK Content 객체를 히스토리 메시지(dict)로 변환합니다."""
+        if content is None:
+            return {
+                'role': 'model',
+                'parts': [self._normalize_part({'text': fallback_text or ''})],
+            }
+
+        role = 'model'
+        if isinstance(content, dict):
+            role = content.get('role', role) or 'model'
+            parts_source = content.get('parts')
+        else:
+            role = getattr(content, 'role', role) or 'model'
+            parts_source = getattr(content, 'parts', None)
+
+        normalized_parts: List[Dict[str, Any]] = []
+        if parts_source:
+            for item in parts_source:
+                normalized_parts.append(self._normalize_part(item))
+
+        if not normalized_parts:
+            normalized_parts.append(self._normalize_part({'text': fallback_text or ''}))
+
+        return {
+            'role': role,
+            'parts': normalized_parts,
+        }
+
+    def _message_from_response(self, response: Any, fallback_text: str = "") -> Dict[str, Any]:
+        """GenerateContentResponse를 히스토리 메시지로 변환합니다."""
+        if response is None:
+            return {
+                'role': 'model',
+                'parts': [self._normalize_part({'text': fallback_text or ''})],
+        }
+
+        primary_candidate = None
+        candidates = getattr(response, 'candidates', None)
+        if candidates:
+            try:
+                primary_candidate = candidates[0]
+            except Exception:
+                primary_candidate = None
+
+        if primary_candidate is not None:
+            content = getattr(primary_candidate, 'content', None)
+            if content is not None:
+                message = self._message_from_content(content, fallback_text=fallback_text)
+                if message:
+                    return message
+
+        content = getattr(response, 'content', None)
+        if content is not None:
+            message = self._message_from_content(content, fallback_text=fallback_text)
+            if message:
+                return message
+
+        to_dict = getattr(response, 'to_dict', None)
+        if callable(to_dict):
+            try:
+                response_dict = response.to_dict()
+                candidates_dict = response_dict.get('candidates') if isinstance(response_dict, dict) else None
+                if isinstance(candidates_dict, list) and candidates_dict:
+                    content_dict = candidates_dict[0].get('content') if isinstance(candidates_dict[0], dict) else None
+                    if content_dict:
+                        message = self._message_from_content(content_dict, fallback_text=fallback_text)
+                        if message:
+                            return message
+            except Exception:
+                pass
+
+        text = getattr(response, 'text', None)
+        fallback = fallback_text or (text if text is not None else '')
+        return {
+            'role': 'model',
+            'parts': [self._normalize_part({'text': str(fallback)})],
+        }
+
+    def _log_function_calls(self, message: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """모델 function_call 파트를 히스토리에 저장하는 대신 로그로만 남깁니다."""
+        if not message:
+            return None
+
+        parts = message.get('parts') or []
+        filtered_parts: List[Dict[str, Any]] = []
+        has_function_call = False
+
+        for part in parts:
+            part_dict = part if isinstance(part, dict) else None
+            function_call = part_dict.get('function_call') if part_dict else None
+            if function_call:
+                has_function_call = True
+                name = function_call.get('name') or 'unknown_function'
+                args = function_call.get('args')
+                args_repr = None
+                if isinstance(args, (dict, list)):
+                    try:
+                        args_repr = json.dumps(args, ensure_ascii=False)
+                    except Exception:
+                        args_repr = str(args)
+                elif args is not None:
+                    args_repr = str(args)
+                logger.info(
+                    "모델 function_call 요청 감지: %s(%s)",
+                    name,
+                    args_repr or '',
+                )
+                continue
+            filtered_parts.append(part)
+
+        if not has_function_call:
+            return message
+
+        if not filtered_parts:
+            return None
+
+        filtered_message = message.copy()
+        filtered_message['parts'] = filtered_parts
+        return filtered_message
+
     def _check_rpm_limit(self):
         """
         RPM 제한을 확인하고 필요시 대기합니다.
@@ -220,7 +509,9 @@ class GeminiClient:
         for message in self.history:
             parts = message.get('parts') or []
             for part in parts:
-                total += self._estimate_text_tokens(part.get('text', ''))
+                part_text = self._part_to_text_repr(part)
+                if part_text:
+                    total += self._estimate_text_tokens(part_text)
         total += len(self.history) * 4  # 역할/메타데이터 오버헤드 보정
         return total
 
@@ -302,27 +593,6 @@ class GeminiClient:
                 limit,
             )
 
-    def _collect_file_parts(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """대상 메시지들에서 중복되지 않는 파일 참조 파트를 추출합니다."""
-        collected: List[Dict[str, Any]] = []
-        seen: Set[Tuple[str, Optional[str]]] = set()
-        for msg in messages:
-            parts = msg.get('parts') or []
-            for part in parts:
-                file_data = part.get('file_data')
-                if not file_data:
-                    continue
-                uri = file_data.get('file_uri')
-                if not uri:
-                    continue
-                mime = file_data.get('mime_type')
-                key = (uri, mime)
-                if key in seen:
-                    continue
-                seen.add(key)
-                collected.append({'file_data': copy.deepcopy(file_data)})
-        return collected
-
     def _compress_history_once(self, keep_turns: int) -> bool:
         """히스토리의 오래된 부분을 요약 메시지로 대체합니다."""
         if not self.history:
@@ -352,27 +622,13 @@ class GeminiClient:
         if self._reconstructed_block:
             summary_text = f"{summary_text}\n\n{self._reconstructed_block}".rstrip()
 
-        retained_file_parts = self._collect_file_parts(compress_candidates)
-        retained_context_messages: List[Dict[str, Any]] = []
-        if retained_file_parts:
-            retained_parts_with_note = retained_file_parts + [{
-                'text': "이전 단계에서 업로드된 이미지 컨텍스트를 유지합니다."
-            }]
-            retained_context_messages.append({
-                'role': 'user',
-                'parts': retained_parts_with_note
-            })
-
         summary_message = {
             'role': 'model',
             'parts': [{'text': f"{self._context_summary_prefix}\n{summary_text}"}]
         }
 
         before_tokens = self._estimate_history_tokens()
-        new_history: List[Dict[str, Any]] = []
-        if retained_context_messages:
-            new_history.extend(retained_context_messages)
-        new_history.append(summary_message)
+        new_history: List[Dict[str, Any]] = [summary_message]
         new_history.extend(preserved_history)
         self.history = new_history
         after_tokens = self._estimate_history_tokens()
@@ -394,9 +650,9 @@ class GeminiClient:
             parts = msg.get('parts') or []
             text_chunks = []
             for part in parts:
-                text = (part.get('text') or '').strip()
-                if text:
-                    text_chunks.append(text)
+                part_text = self._part_to_text_repr(part)
+                if part_text:
+                    text_chunks.append(part_text.strip())
             if not text_chunks:
                 continue
             joined = '\n'.join(text_chunks).strip()
@@ -504,9 +760,11 @@ class GeminiClient:
         if not suppress_log:
             logger.info(f"새 대화가 시작되었습니다. 히스토리 길이: {len(self.history)}")
 
-    def send_message(self, message: str, model: Optional[str] = None, 
+    def send_message(self, message: str = "", model: Optional[str] = None, 
                     response_schema: Optional[Dict] = None,
-                    response_mime_type: Optional[str] = None) -> str:
+                    response_mime_type: Optional[str] = None,
+                    *,
+                    message_parts: Optional[Sequence[Dict[str, Any]]] = None) -> str:
         """
         메시지를 보내고 모델의 응답을 받습니다. 대화 히스토리를 자동으로 관리합니다.
 
@@ -527,10 +785,22 @@ class GeminiClient:
         self._prepare_history_for_new_message(message)
         self._check_rpm_limit()
 
-        # 사용자 메시지를 히스토리에 추가
+        user_message_parts: List[Dict[str, Any]] = []
+        if message_parts:
+            for part in message_parts:
+                normalized = self._normalize_part(part)
+                if normalized:
+                    user_message_parts.append(normalized)
+
+        if message:
+            user_message_parts.append({'text': message})
+
+        if not user_message_parts:
+            raise ValueError("message 또는 message_parts 중 하나는 반드시 제공되어야 합니다.")
+
         user_message = {
             'role': 'user',
-            'parts': [{'text': message}]
+            'parts': user_message_parts
         }
         self.history.append(user_message)
 
@@ -557,14 +827,31 @@ class GeminiClient:
                 config=config_payload
             )
 
-            # 모델 응답을 히스토리에 추가
-            model_response = {
-                'role': 'model',
-                'parts': [{'text': response.text}]
-            }
-            self.history.append(model_response)
+            raw_model_response = self._message_from_response(response, fallback_text=response.text or '')
+            model_response = self._log_function_calls(raw_model_response)
+            if model_response is not None:
+                self.history.append(model_response)
 
-            model_tokens_estimate = self._estimate_text_tokens(response.text or '')
+            response_text_out = getattr(response, 'text', None)
+            response_lookup_source = model_response or raw_model_response
+            if not response_text_out and response_lookup_source:
+                for part in response_lookup_source.get('parts', []):
+                    text_candidate = part.get('text') if isinstance(part, dict) else None
+                    if text_candidate:
+                        response_text_out = text_candidate
+                        break
+            response_text_out = response_text_out or ''
+
+            joined_model_text = " ".join(
+                filter(
+                    None,
+                    (
+                        self._part_to_text_repr(part, assume_normalized=True)
+                        for part in (response_lookup_source.get('parts', []) if response_lookup_source else [])
+                    ),
+                )
+            )
+            model_tokens_estimate = self._estimate_text_tokens(joined_model_text)
             self._token_usage_total += prompt_tokens_estimate + model_tokens_estimate
             history_tokens = self._estimate_history_tokens()
             token_limit = self.context_limit_tokens if self.context_compression_enabled else '∞'
@@ -576,7 +863,7 @@ class GeminiClient:
                 history_tokens,
                 token_limit,
             )
-            return response.text or ""
+            return response_text_out
 
         except errors.APIError as e:
             # 오류 발생 시 추가한 사용자 메시지 롤백
@@ -589,9 +876,11 @@ class GeminiClient:
             logger.error(f"메시지 전송 중 오류: {e}")
             raise
 
-    def send_message_stream(self, message: str, model: Optional[str] = None,
+    def send_message_stream(self, message: str = "", model: Optional[str] = None,
                           response_schema: Optional[Dict] = None,
-                          response_mime_type: Optional[str] = None) -> Iterator[str]:
+                          response_mime_type: Optional[str] = None,
+                          *,
+                          message_parts: Optional[Sequence[Dict[str, Any]]] = None) -> Iterator[str]:
         """
         메시지를 보내고 모델의 응답을 스트리밍으로 받습니다.
 
@@ -612,10 +901,22 @@ class GeminiClient:
         self._prepare_history_for_new_message(message)
         self._check_rpm_limit()
 
-        # 사용자 메시지를 히스토리에 추가
+        user_message_parts: List[Dict[str, Any]] = []
+        if message_parts:
+            for part in message_parts:
+                normalized = self._normalize_part(part)
+                if normalized:
+                    user_message_parts.append(normalized)
+
+        if message:
+            user_message_parts.append({'text': message})
+
+        if not user_message_parts:
+            raise ValueError("message 또는 message_parts 중 하나는 반드시 제공되어야 합니다.")
+
         user_message = {
             'role': 'user',
-            'parts': [{'text': message}]
+            'parts': user_message_parts
         }
         self.history.append(user_message)
 
@@ -643,23 +944,55 @@ class GeminiClient:
             )
 
             # 스트리밍 응답 수집
-            full_response_text = []
             full_response_combined = ""  # 초기화
+            final_response = None
             for chunk in stream:
+                final_response = chunk
                 if chunk.text:
-                    full_response_text.append(chunk.text)
                     full_response_combined += chunk.text  # 실시간 업데이트
                     logger.debug(f"full_response_combined: {full_response_combined}")  # 디버그 로그
                     yield chunk.text
 
             # 전체 응답을 히스토리에 추가
-            model_response = {
-                'role': 'model',
-                'parts': [{'text': full_response_combined}]
-            }
-            self.history.append(model_response)
+            raw_model_response = self._message_from_response(final_response, fallback_text=full_response_combined)
+            if raw_model_response is None:
+                raw_model_response = {
+                    'role': 'model',
+                    'parts': [{'text': full_response_combined}]
+                }
+            else:
+                parts = raw_model_response.get('parts')
+                if not isinstance(parts, list):
+                    parts = raw_model_response['parts'] = []
+                replaced_text = False
+                if full_response_combined:
+                    for part in parts:
+                        if isinstance(part, dict) and 'text' in part and not replaced_text:
+                            part['text'] = full_response_combined
+                            replaced_text = True
+                        elif isinstance(part, dict) and 'text' in part and replaced_text:
+                            # 중복 텍스트 파트 제거
+                            part.pop('text', None)
+                    if not replaced_text:
+                        parts.append({'text': full_response_combined})
 
-            model_tokens_estimate = self._estimate_text_tokens(full_response_combined)
+            model_response = self._log_function_calls(raw_model_response)
+            if model_response is not None:
+                self.history.append(model_response)
+
+            joined_model_text = " ".join(
+                filter(
+                    None,
+                    (
+                        self._part_to_text_repr(part, assume_normalized=True)
+                        for part in (
+                            (model_response or raw_model_response).get('parts', [])
+                            if (model_response or raw_model_response) else []
+                        )
+                    ),
+                )
+            )
+            model_tokens_estimate = self._estimate_text_tokens(joined_model_text)
             self._token_usage_total += prompt_tokens_estimate + model_tokens_estimate
 
             history_tokens = self._estimate_history_tokens()
@@ -942,6 +1275,41 @@ class GeminiClient:
             self.generation_config.pop('response_mime_type', None)
             self.default_response_mime_type = None
 
+    def prepare_image_parts(
+        self,
+        image_paths: Union[str, os.PathLike[str], Sequence[Union[str, os.PathLike[str]]]],
+    ) -> List[Dict[str, Any]]:
+        """
+        이미지 파일을 업로드하고 file_data 파트 목록을 반환합니다.
+        """
+        if isinstance(image_paths, (str, os.PathLike)):
+            normalized_paths = [os.fspath(image_paths)]
+        else:
+            normalized_paths = [os.fspath(path) for path in image_paths]
+
+        normalized_paths = [path for path in normalized_paths if path]
+        if not normalized_paths:
+            raise ValueError("image_paths는 비어 있을 수 없습니다.")
+
+        parts: List[Dict[str, Any]] = []
+        for path in normalized_paths:
+            if not os.path.exists(path):
+                logger.error("이미지 파일을 찾을 수 없습니다: %s", path)
+                raise FileNotFoundError(f"이미지 파일을 찾을 수 없습니다: {path}")
+
+            logger.info("이미지 업로드 준비: %s", path)
+            upload_config = types.UploadFileConfig(displayName=os.path.basename(path))
+            uploaded = self.client.files.upload(file=path, config=upload_config)
+            file_uri = getattr(uploaded, "uri", None) or getattr(uploaded, "file_uri", None)
+            mime_type = getattr(uploaded, "mime_type", None) or getattr(uploaded, "mimeType", None)
+            if not file_uri or not mime_type:
+                logger.error("업로드된 파일 메타데이터를 해석하지 못했습니다: %s", uploaded)
+                raise RuntimeError(f"업로드된 파일 메타데이터를 해석하지 못했습니다: {uploaded!r}")
+
+            parts.append({"file_data": {"file_uri": file_uri, "mime_type": mime_type}})
+
+        return parts
+
     def send_image_prompt(
         self,
         image_paths: Union[str, os.PathLike[str], Sequence[Union[str, os.PathLike[str]]]],
@@ -967,31 +1335,7 @@ class GeminiClient:
             google_exceptions.GoogleAPICallError: API 호출에 실패한 경우.
             Exception: 그 외 예상치 못한 오류가 발생한 경우.
         """
-        if isinstance(image_paths, (str, os.PathLike)):
-            normalized_paths = [os.fspath(image_paths)]
-        else:
-            normalized_paths = [os.fspath(path) for path in image_paths]
-
-        normalized_paths = [path for path in normalized_paths if path]
-        if not normalized_paths:
-            raise ValueError("image_paths는 비어 있을 수 없습니다.")
-
-        parts: List[Dict[str, Any]] = []
-        for path in normalized_paths:
-            if not os.path.exists(path):
-                logger.error("이미지 파일을 찾을 수 없습니다: %s", path)
-                raise FileNotFoundError(f"이미지 파일을 찾을 수 없습니다: {path}")
-
-            logger.info("멀티모달 요청을 위해 이미지 업로드: %s", path)
-            upload_config = types.UploadFileConfig(displayName=os.path.basename(path))
-            uploaded = self.client.files.upload(file=path, config=upload_config)
-            file_uri = getattr(uploaded, "uri", None) or getattr(uploaded, "file_uri", None)
-            mime_type = getattr(uploaded, "mime_type", None) or getattr(uploaded, "mimeType", None)
-            if not file_uri or not mime_type:
-                logger.error("업로드된 파일 메타데이터를 해석하지 못했습니다: %s", uploaded)
-                raise RuntimeError(f"업로드된 파일 메타데이터를 해석하지 못했습니다: {uploaded!r}")
-
-            parts.append({"file_data": {"file_uri": file_uri, "mime_type": mime_type}})
+        parts = self.prepare_image_parts(image_paths)
 
         self._prepare_history_for_new_message(prompt or "")
         self._check_rpm_limit()
@@ -1013,23 +1357,45 @@ class GeminiClient:
                 config=config_payload,
             )
 
-            response_text = (response.text or "").strip()
-            model_response = {"role": "model", "parts": [{"text": response_text}]}
-            self.history.append(model_response)
+            response_text_raw = getattr(response, 'text', None)
+            response_text = (response_text_raw or "").strip()
+            raw_model_response = self._message_from_response(response, fallback_text=response_text)
+            model_response = self._log_function_calls(raw_model_response)
+            if model_response is not None:
+                self.history.append(model_response)
 
-            model_tokens_estimate = self._estimate_text_tokens(response_text)
+            joined_model_text = " ".join(
+                filter(
+                    None,
+                    (
+                        self._part_to_text_repr(part, assume_normalized=True)
+                        for part in (
+                            (model_response or raw_model_response).get('parts', [])
+                            if (model_response or raw_model_response) else []
+                        )
+                    ),
+                )
+            )
+            model_tokens_estimate = self._estimate_text_tokens(joined_model_text)
             self._token_usage_total += prompt_tokens_estimate + model_tokens_estimate
             history_tokens = self._estimate_history_tokens()
             token_limit = self.context_limit_tokens if self.context_compression_enabled else '∞'
             logger.info(
                 "이미지 프롬프트 전송 완료. 업로드 이미지 수: %s, 요청 토큰: %s, 응답 추정 토큰: %s, 히스토리 추정 토큰: %s/%s",
-                len(normalized_paths),
+                len(parts) - (1 if prompt else 0),
                 prompt_tokens_estimate,
                 model_tokens_estimate,
                 history_tokens,
                 token_limit,
             )
-            return response_text
+            if response_text:
+                return response_text
+            fallback_source = model_response or raw_model_response
+            for part in (fallback_source.get('parts', []) if fallback_source else []):
+                candidate_text = part.get('text') if isinstance(part, dict) else None
+                if candidate_text:
+                    return candidate_text
+            return ""
 
         except errors.APIError as e:
             self.history.pop()

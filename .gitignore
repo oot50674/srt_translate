@@ -5,6 +5,7 @@
 /database.db
 /logs
 /docs
+/snapshots
 /.claude
 AGENTS.md
 *.pyc

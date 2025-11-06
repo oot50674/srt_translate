@@ -6,7 +6,6 @@ import time
 import uuid
 from datetime import datetime
 import re
-import shutil
 from typing import Optional, Dict, List, Any
 from flask import Flask, render_template, request, jsonify, Response
 from dotenv import load_dotenv, set_key
@@ -39,6 +38,61 @@ load_dotenv(dotenv_path=ENV_PATH, override=False)
 DEFAULT_MODEL = "gemini-2.5-flash"
 DEFAULT_CONTEXT_KEEP_RECENT = 50  # 히스토리 재구성 시 유지할 최근 자막 엔트리 수
 HISTORY_LOG_DIR = os.path.join(BASE_DIR, 'logs')
+SNAPSHOT_ROOT_DIR = os.path.join(BASE_DIR, 'snapshots')
+
+def _srt_timestamp_to_seconds(value: str) -> float:
+    """SRT 타임스탬프(HH:MM:SS,mmm)를 초 단위 float로 변환합니다."""
+    try:
+        hours, minutes, rest = value.strip().split(":")
+        seconds, millis = rest.split(",")
+        total = (
+            int(hours) * 3600
+            + int(minutes) * 60
+            + int(seconds)
+            + int(millis) / 1000.0
+        )
+        return max(total, 0.0)
+    except Exception:
+        return 0.0
+
+def _calculate_snapshot_count(entry_count: int) -> int:
+    """청크 엔트리 수에 기반한 스냅샷 개수를 계산합니다."""
+    base = 1 + max(0, entry_count // 10)
+    return max(base, 1)
+
+def _compute_chunk_time_bounds(subtitles: List[Dict[str, Any]]) -> tuple[float, float]:
+    """청크 자막들의 시작/종료 시간을 초 단위로 계산합니다."""
+    if not subtitles:
+        return 0.0, 0.0
+    starts = [_srt_timestamp_to_seconds(sub.get('start', '0')) for sub in subtitles]
+    ends = [_srt_timestamp_to_seconds(sub.get('end', '0')) for sub in subtitles]
+    start = max(0.0, min(starts))
+    end = max(max(ends), start + 0.5)
+    return start, end
+
+def _make_chunk_timestamps(start: float, end: float, count: int, duration: float) -> List[float]:
+    """청크 구간 내 균등 분포된 스냅샷 타임스탬프를 생성합니다."""
+    if count <= 0:
+        return []
+    start = max(0.0, min(start, duration))
+    end = min(max(end, start + 0.5), duration)
+    if end - start < 0.5:
+        padding = 0.25
+        start = max(0.0, start - padding)
+        end = min(duration, end + padding)
+    span = max(end - start, 0.5)
+    return [start + span * (i + 1) / (count + 1) for i in range(count)]
+
+def _create_chunk_snapshots(stream_url: str, timestamps: List[float], chunk_index: int, session_dir: str) -> List[str]:
+    """지정된 타임스탬프에서 스냅샷을 생성하고 경로 목록을 반환합니다."""
+    if not timestamps:
+        raise ValueError("스냅샷 타임스탬프가 비어 있습니다.")
+    os.makedirs(session_dir, exist_ok=True)
+    chunk_dir = os.path.join(session_dir, f"chunk_{chunk_index:04d}")
+    os.makedirs(chunk_dir, exist_ok=True)
+    prefix = f"chunk_{chunk_index:04d}"
+    ffmpeg_module.snapshot_at_times(stream_url, timestamps, chunk_dir, prefix=prefix)
+    return [os.path.join(chunk_dir, f"{prefix}_{idx:03d}.jpg") for idx in range(1, len(timestamps) + 1)]
 
 def save_api_key_to_env(api_key: str) -> None:
     """사용자가 입력한 API 키를 .env(GOOGLE_API_KEY)와 환경변수에 저장합니다."""
@@ -81,8 +135,14 @@ def save_history_log(client: GeminiClient, job_id: Optional[str] = None) -> None
 
 ## 레거시 재구성 헬퍼 제거됨: GeminiClient.set_reconstructed_subtitles 로 일원화
 
-def translate_srt_stream(content: str, client, target_lang: str = '한국어', batch_size: int = 10, user_prompt: str = '', thinking_budget: int = 0, stop_flag = None):
+def translate_srt_stream(content: str, client, target_lang: str = '한국어', batch_size: int = 10,
+                         user_prompt: str = '', thinking_budget: int = 0, stop_flag = None,
+                         video_context: Optional[Dict[str, Any]] = None,
+                         job_label: Optional[str] = None):
     """SRT 텍스트를 번역하며 진행 상황을 스트림으로 제공합니다."""
+    target_lang = (target_lang or '한국어').strip()
+    if not target_lang:
+        target_lang = '한국어'
     logger.info("translate_srt_stream 호출됨 - 파라미터: target_lang=%s, batch_size=%s, thinking_budget=%s",
                target_lang, batch_size, thinking_budget)
 
@@ -149,6 +209,28 @@ def translate_srt_stream(content: str, client, target_lang: str = '한국어', b
     yield json.dumps({'count': len(subtitles)}) + "\n"
 
     processed_translations: Dict[int, str] = {}
+    base_user_prompt = user_prompt or ''
+    video_stream_url: Optional[str] = None
+    video_duration: Optional[float] = None
+    video_label: Optional[str] = None
+    if video_context:
+        video_stream_url = video_context.get('stream_url')
+        duration_value = video_context.get('duration')
+        try:
+            video_duration = float(duration_value) if duration_value is not None else None
+        except (TypeError, ValueError):
+            video_duration = None
+        video_label = video_context.get('youtube_url')
+    chunk_counter = 0
+    snapshot_session_dir: Optional[str] = None
+    if video_stream_url and video_duration:
+        base_label = job_label or video_label or 'session'
+        safe_label = re.sub(r'[^A-Za-z0-9_-]+', '-', base_label) or 'session'
+        snapshot_session_dir = os.path.join(
+            SNAPSHOT_ROOT_DIR,
+            f"{safe_label}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+        )
+        os.makedirs(snapshot_session_dir, exist_ok=True)
 
     for i in range(0, len(subtitles), batch_size):
         # 중단 플래그 확인
@@ -158,13 +240,51 @@ def translate_srt_stream(content: str, client, target_lang: str = '한국어', b
             
         batch = subtitles[i:i + batch_size]
         original_sub_map = {sub['index']: sub for sub in batch}
+        chunk_counter += 1
 
-        batch_items = []
-        for sub in batch:
-            escaped_text = sub["text"].replace('"', '\"').replace('\n', '\n').replace('\r', '')
-            batch_items.append(json.dumps({"index": sub["index"], "text": escaped_text}))
+        chunk_prompt_base = base_user_prompt
+        chunk_image_parts: Optional[List[Dict[str, Any]]] = None
+        chunk_context_text: Optional[str] = None
 
-        prompt = build_translation_prompt(user_prompt, target_lang, batch)
+        if video_stream_url and video_duration and snapshot_session_dir:
+            entry_count = len(batch)
+            snapshot_count = _calculate_snapshot_count(entry_count)
+            try:
+                chunk_start, chunk_end = _compute_chunk_time_bounds(batch)
+                timestamps = _make_chunk_timestamps(chunk_start, chunk_end, snapshot_count, video_duration)
+                snapshot_paths = _create_chunk_snapshots(
+                    video_stream_url,
+                    timestamps,
+                    chunk_counter,
+                    snapshot_session_dir,
+                )
+                analysis_prompt = (
+                    f"다음 이미지는 유튜브 영상 청크 #{chunk_counter}"
+                    f" (엔트리 {entry_count}개)"
+                    f"{f' - {video_label}' if video_label else ''}에 해당하는 장면입니다. "
+                    "영상의 주요 등장인물, 사건, 분위기를 한국어로 요약하고, "
+                    "번역 시 주의해야 할 맥락이나 용어를 정리해 주세요."
+                )
+                chunk_image_parts = client.prepare_image_parts(snapshot_paths)
+                chunk_context_text = (
+                    f"[영상 청크 #{chunk_counter} 이미지 컨텍스트]\n"
+                    f"- 엔트리 수: {entry_count}\n"
+                    f"- 원본 영상: {video_label or video_stream_url}\n"
+                    "위 스냅샷을 참고하여 주요 등장인물, 장면 분위기, 시각적 단서를 고려한 번역 결과를 생성하세요."
+                )
+                logger.info(
+                    "청크 %s 이미지 %s장 업로드 및 컨텍스트 준비 완료",
+                    chunk_counter,
+                    len(chunk_image_parts),
+                )
+            except Exception as exc:
+                logger.error("청크 %s 스냅샷 처리 실패: %s", chunk_counter, exc)
+                chunk_image_parts = None
+                chunk_context_text = None
+
+        prompt = build_translation_prompt(chunk_prompt_base, target_lang, batch)
+        if chunk_context_text:
+            prompt = f"{chunk_context_text}\n\n{prompt}"
 
         # 새 통합 방식: 매 배치 전에 GeminiClient에 재구성 자막 블록만 업데이트.
         # 실제 [WORK SUMMARY] 생성/압축 시점은 GeminiClient 내부 로직이 판단.
@@ -222,12 +342,7 @@ def translate_srt_stream(content: str, client, target_lang: str = '한국어', b
                 logger.info(f"재시도 {retry_count}회: 미처리 엔트리 {len(current_batch_to_translate)}개만 재번역")
 
                 # 미처리 엔트리만 포함한 새 프롬프트 생성
-                batch_items = []
-                for sub in current_batch_to_translate:
-                    escaped_text = sub["text"].replace('"', '\"').replace('\n', '\n').replace('\r', '')
-                    batch_items.append(json.dumps({"index": sub["index"], "text": escaped_text}))
-
-                prompt = build_translation_prompt(user_prompt, target_lang, current_batch_to_translate)
+                prompt = build_translation_prompt(chunk_prompt_base, target_lang, current_batch_to_translate)
 
             try:
                 buffer = ""
@@ -235,7 +350,20 @@ def translate_srt_stream(content: str, client, target_lang: str = '한국어', b
                 batch_translations: Dict[int, str] = {}
 
                 # response_schema를 사용하여 스트리밍 요청
-                for chunk in client.send_message_stream(prompt, response_schema=response_schema):
+                stream_message = prompt
+                stream_parts = None
+                if chunk_image_parts:
+                    stream_parts = list(chunk_image_parts)
+                    stream_parts.append({'text': prompt})
+                    stream_message = ""
+
+                stream_iterator = client.send_message_stream(
+                    stream_message,
+                    response_schema=response_schema,
+                    message_parts=stream_parts,
+                )
+
+                for chunk in stream_iterator:
                     # 각 청크마다 중단 플래그 확인
                     if stop_flag and stop_flag.get('stopped', False):
                         logger.info("스트리밍 중 중단 플래그가 설정되어 번역을 중지합니다.")
@@ -351,7 +479,7 @@ def translate_srt_stream(content: str, client, target_lang: str = '한국어', b
                         { 'index': original_sub_map[idx]['index'], 'text': original_sub_map[idx]['text'] }
                         for idx in sorted(original_sub_map.keys())
                     ]
-                    complete_prompt = build_translation_prompt(user_prompt, target_lang, original_entries_for_prompt)
+                    complete_prompt = build_translation_prompt(chunk_prompt_base, target_lang, original_entries_for_prompt)
 
                     # 전체 배치의 완전한 JSON 응답 재구성
                     complete_translations = []
@@ -367,8 +495,29 @@ def translate_srt_stream(content: str, client, target_lang: str = '한국어', b
                     )
 
                     # 히스토리의 마지막 턴을 완전한 요청/응답으로 교체
-                    client.history[-2]['parts'][0]['text'] = complete_prompt
-                    client.history[-1]['parts'][0]['text'] = complete_response
+                    request_parts = client.history[-2].setdefault('parts', [])
+                    if not isinstance(request_parts, list):
+                        request_parts = client.history[-2]['parts'] = []
+                    replaced_request = False
+                    for part in request_parts:
+                        if isinstance(part, dict) and 'text' in part:
+                            part['text'] = complete_prompt
+                            replaced_request = True
+                            break
+                    if not replaced_request:
+                        request_parts.insert(0, {'text': complete_prompt})
+
+                    response_parts = client.history[-1].setdefault('parts', [])
+                    if not isinstance(response_parts, list):
+                        response_parts = client.history[-1]['parts'] = []
+                    replaced_response = False
+                    for part in response_parts:
+                        if isinstance(part, dict) and 'text' in part:
+                            part['text'] = complete_response
+                            replaced_response = True
+                            break
+                    if not replaced_response:
+                        response_parts.insert(0, {'text': complete_response})
                     logger.info(f"재시도 후 히스토리 재구성 완료: 전체 {len(confirmed_translations)}개 엔트리 반영")
 
 @app.route('/')
@@ -656,61 +805,28 @@ def upload_srt():
     
     logger.info("다중 파일 처리를 위한 공유 클라이언트가 생성되었습니다.")
 
-    video_context_summary: Optional[str] = None
+    video_context: Optional[Dict[str, Any]] = None
     if youtube_url:
-        snapshot_dir: Optional[str] = None
         try:
-            logger.info("유튜브 링크 감지, 스냅샷 분석 시작: %s", youtube_url)
-            snapshot_dir = tempfile.mkdtemp(prefix="yt_snapshots_")
-            snapshot_paths = ffmpeg_module.snapshots_from_youtube(
-                youtube_url,
-                count=5,
-                out_dir=snapshot_dir,
+            stream_url = ffmpeg_module.get_stream_url(youtube_url)
+            duration_seconds = ffmpeg_module.get_duration_seconds(stream_url)
+            video_context = {
+                'youtube_url': youtube_url,
+                'stream_url': stream_url,
+                'duration': duration_seconds,
+            }
+            logger.info(
+                "유튜브 영상 컨텍스트 준비 완료: duration=%.2fs",
+                duration_seconds,
             )
-            if snapshot_paths:
-                summary_prompt_text = (
-                    "다음 이미지는 번역할 유튜브 영상의 주요 장면입니다. "
-                    "영상의 등장인물, 배경, 분위기, 주요 사건을 한국어로 간단히 요약하고, "
-                    "자막 번역 시 주의해야 할 맥락이나 용어를 정리해 주세요."
-                )
-                video_context_summary = (shared_client.send_image_prompt(
-                    snapshot_paths,
-                    prompt=summary_prompt_text,
-                ) or "").strip()
-                if video_context_summary:
-                    logger.info(
-                        "영상 맥락 요약 생성 완료 (문자 수: %d)",
-                        len(video_context_summary),
-                    )
-                else:
-                    logger.warning("영상 맥락 요약이 비어 있습니다.")
-            else:
-                logger.warning("생성된 스냅샷이 없어 맥락 분석을 건너뜁니다.")
         except Exception as exc:
-            logger.error("유튜브 스냅샷 처리 중 오류: %s", exc)
-        finally:
-            if snapshot_dir:
-                try:
-                    shutil.rmtree(snapshot_dir, ignore_errors=True)
-                except Exception as cleanup_exc:
-                    logger.warning("스냅샷 임시 디렉터리 삭제 실패: %s", cleanup_exc)
-
-        if video_context_summary:
-            context_instruction = (
-                "위 유튜브 영상 장면 요약을 참고하여 자막을 자연스럽고 일관된 톤으로 번역하세요."
-            )
-            user_prompt = (
-                f"{context_instruction}\n\n{user_prompt}".strip()
-                if user_prompt else
-                context_instruction
-            )
+            logger.error("유튜브 스트림 정보 준비 실패: %s", exc)
+            video_context = None
 
     def generate():
         try:
             # 총 파일 수 전송
             yield json.dumps({'total_files': len(temp_paths)}) + "\n"
-            if video_context_summary:
-                yield json.dumps({'video_context_summary': video_context_summary}, ensure_ascii=False) + "\n"
             
             for name, path in temp_paths:
                 # 중단 플래그 확인
@@ -725,7 +841,17 @@ def upload_srt():
                     srt_content = f.read()
                 
                 # 파일별 번역 결과를 스트림으로 전송 (공유 클라이언트 사용)
-                for line in translate_srt_stream(srt_content, shared_client, target_lang, batch_size, user_prompt, thinking_budget_val, stop_flag):
+                for line in translate_srt_stream(
+                    srt_content,
+                    shared_client,
+                    target_lang,
+                    batch_size,
+                    user_prompt,
+                    thinking_budget_val,
+                    stop_flag,
+                    video_context,
+                    job_id,
+                ):
                     yield line
                     # 중단 플래그 확인
                     if stop_flag['stopped']:
