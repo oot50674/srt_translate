@@ -764,23 +764,30 @@ class GeminiClient:
         if not suppress_log:
             logger.info(f"새 대화가 시작되었습니다. 히스토리 길이: {len(self.history)}")
 
-    def send_message(self, message: str = "", model: Optional[str] = None, 
+    def send_message(self, message: str = "", model: Optional[str] = None,
                     response_schema: Optional[Dict] = None,
                     response_mime_type: Optional[str] = None,
                     *,
-                    message_parts: Optional[Sequence[Dict[str, Any]]] = None) -> str:
+                    message_parts: Optional[Sequence[Dict[str, Any]]] = None,
+                    image_paths: Optional[Union[str, os.PathLike[str], Sequence[Union[str, os.PathLike[str]]]]] = None,
+                    video_paths: Optional[Union[str, os.PathLike[str], Sequence[Union[str, os.PathLike[str]]]]] = None,
+                    max_wait_seconds: int = 300) -> str:
         """
-        메시지를 보내고 모델의 응답을 받습니다. 대화 히스토리를 자동으로 관리합니다.
+        메시지를 보내고 모델의 응답을 받습니다. 텍스트, 이미지, 비디오를 통합적으로 처리합니다.
 
         Args:
             message (str): 사용자 메시지.
             model (str, optional): 사용할 모델. 지정하지 않으면 기본 모델 사용.
             response_schema (dict, optional): 이번 요청만을 위한 JSON 응답 스키마.
             response_mime_type (str, optional): 이번 요청만을 위한 응답 MIME 타입.
+            message_parts (Sequence[Dict], optional): 수동으로 구성한 메시지 파트.
+            image_paths (str | os.PathLike | Sequence, optional): 업로드할 이미지 경로.
+            video_paths (str | os.PathLike | Sequence, optional): 업로드할 비디오 경로.
+            max_wait_seconds (int): 비디오 파일이 ACTIVE 상태가 될 때까지 최대 대기 시간 (초).
 
         Returns:
             str: 모델의 응답 텍스트.
-        
+
         Raises:
             google_exceptions.GoogleAPICallError: API 호출에 실패한 경우.
             Exception: 그 외 예상치 못한 오류가 발생한 경우.
@@ -790,17 +797,30 @@ class GeminiClient:
         self._check_rpm_limit()
 
         user_message_parts: List[Dict[str, Any]] = []
+
+        # 이미지 파일 업로드 및 추가
+        if image_paths is not None:
+            image_parts = self.prepare_image_parts(image_paths)
+            user_message_parts.extend(image_parts)
+
+        # 비디오 파일 업로드 및 추가
+        if video_paths is not None:
+            video_parts = self.prepare_video_parts(video_paths, max_wait_seconds=max_wait_seconds)
+            user_message_parts.extend(video_parts)
+
+        # 수동으로 구성한 파트 추가
         if message_parts:
             for part in message_parts:
                 normalized = self._normalize_part(part)
                 if normalized:
                     user_message_parts.append(normalized)
 
+        # 텍스트 메시지 추가
         if message:
             user_message_parts.append({'text': message})
 
         if not user_message_parts:
-            raise ValueError("message 또는 message_parts 중 하나는 반드시 제공되어야 합니다.")
+            raise ValueError("message, message_parts, image_paths, video_paths 중 하나는 반드시 제공되어야 합니다.")
 
         user_message = {
             'role': 'user',
@@ -884,19 +904,26 @@ class GeminiClient:
                           response_schema: Optional[Dict] = None,
                           response_mime_type: Optional[str] = None,
                           *,
-                          message_parts: Optional[Sequence[Dict[str, Any]]] = None) -> Iterator[str]:
+                          message_parts: Optional[Sequence[Dict[str, Any]]] = None,
+                          image_paths: Optional[Union[str, os.PathLike[str], Sequence[Union[str, os.PathLike[str]]]]] = None,
+                          video_paths: Optional[Union[str, os.PathLike[str], Sequence[Union[str, os.PathLike[str]]]]] = None,
+                          max_wait_seconds: int = 300) -> Iterator[str]:
         """
-        메시지를 보내고 모델의 응답을 스트리밍으로 받습니다.
+        메시지를 보내고 모델의 응답을 스트리밍으로 받습니다. 텍스트, 이미지, 비디오를 통합적으로 처리합니다.
 
         Args:
             message (str): 사용자 메시지.
             model (str, optional): 사용할 모델. 지정하지 않으면 기본 모델 사용.
             response_schema (dict, optional): 이번 요청만을 위한 JSON 응답 스키마.
             response_mime_type (str, optional): 이번 요청만을 위한 응답 MIME 타입.
+            message_parts (Sequence[Dict], optional): 수동으로 구성한 메시지 파트.
+            image_paths (str | os.PathLike | Sequence, optional): 업로드할 이미지 경로.
+            video_paths (str | os.PathLike | Sequence, optional): 업로드할 비디오 경로.
+            max_wait_seconds (int): 비디오 파일이 ACTIVE 상태가 될 때까지 최대 대기 시간 (초).
 
         Yields:
             str: 생성된 텍스트 조각.
-        
+
         Raises:
             google_exceptions.GoogleAPICallError: API 호출에 실패한 경우.
             Exception: 그 외 예상치 못한 오류가 발생한 경우.
@@ -906,17 +933,30 @@ class GeminiClient:
         self._check_rpm_limit()
 
         user_message_parts: List[Dict[str, Any]] = []
+
+        # 이미지 파일 업로드 및 추가
+        if image_paths is not None:
+            image_parts = self.prepare_image_parts(image_paths)
+            user_message_parts.extend(image_parts)
+
+        # 비디오 파일 업로드 및 추가
+        if video_paths is not None:
+            video_parts = self.prepare_video_parts(video_paths, max_wait_seconds=max_wait_seconds)
+            user_message_parts.extend(video_parts)
+
+        # 수동으로 구성한 파트 추가
         if message_parts:
             for part in message_parts:
                 normalized = self._normalize_part(part)
                 if normalized:
                     user_message_parts.append(normalized)
 
+        # 텍스트 메시지 추가
         if message:
             user_message_parts.append({'text': message})
 
         if not user_message_parts:
-            raise ValueError("message 또는 message_parts 중 하나는 반드시 제공되어야 합니다.")
+            raise ValueError("message, message_parts, image_paths, video_paths 중 하나는 반드시 제공되어야 합니다.")
 
         user_message = {
             'role': 'user',
@@ -1278,4 +1318,120 @@ class GeminiClient:
             # 스키마가 없고 MIME 타입도 지정하지 않았으면 제거
             self.generation_config.pop('response_mime_type', None)
             self.default_response_mime_type = None
+
+    def prepare_image_parts(
+        self,
+        image_paths: Union[str, os.PathLike[str], Sequence[Union[str, os.PathLike[str]]]],
+    ) -> List[Dict[str, Any]]:
+        """
+        이미지 파일을 업로드하고 file_data 파트 목록을 반환합니다.
+        """
+        if isinstance(image_paths, (str, os.PathLike)):
+            normalized_paths = [os.fspath(image_paths)]
+        else:
+            normalized_paths = [os.fspath(path) for path in image_paths]
+
+        normalized_paths = [path for path in normalized_paths if path]
+        if not normalized_paths:
+            raise ValueError("image_paths는 비어 있을 수 없습니다.")
+
+        parts: List[Dict[str, Any]] = []
+        for path in normalized_paths:
+            if not os.path.exists(path):
+                logger.error("이미지 파일을 찾을 수 없습니다: %s", path)
+                raise FileNotFoundError(f"이미지 파일을 찾을 수 없습니다: {path}")
+
+            logger.info("이미지 업로드 준비: %s", path)
+            upload_config = types.UploadFileConfig(displayName=os.path.basename(path))
+            uploaded = self.client.files.upload(file=path, config=upload_config)
+            file_uri = getattr(uploaded, "uri", None) or getattr(uploaded, "file_uri", None)
+            mime_type = getattr(uploaded, "mime_type", None) or getattr(uploaded, "mimeType", None)
+            if not file_uri or not mime_type:
+                logger.error("업로드된 파일 메타데이터를 해석하지 못했습니다: %s", uploaded)
+                raise RuntimeError(f"업로드된 파일 메타데이터를 해석하지 못했습니다: {uploaded!r}")
+
+            parts.append({"file_data": {"file_uri": file_uri, "mime_type": mime_type}})
+
+        return parts
+
+    def prepare_video_parts(
+        self,
+        video_paths: Union[str, os.PathLike[str], Sequence[Union[str, os.PathLike[str]]]],
+        max_wait_seconds: int = 300,
+    ) -> List[Dict[str, Any]]:
+        """
+        비디오 파일을 업로드하고 file_data 파트 목록을 반환합니다.
+        파일이 ACTIVE 상태가 될 때까지 자동으로 대기합니다.
+
+        Args:
+            video_paths (str | os.PathLike | Sequence[str | os.PathLike]):
+                업로드할 비디오 경로 또는 경로 리스트.
+            max_wait_seconds (int): 파일이 ACTIVE 상태가 될 때까지 최대 대기 시간 (초).
+
+        Returns:
+            list: file_data 파트 리스트
+
+        Raises:
+            FileNotFoundError: 비디오 파일이 존재하지 않을 때.
+            ValueError: 비디오 경로 목록이 비어 있을 때.
+            RuntimeError: 업로드된 파일 메타데이터를 해석하지 못했을 때.
+            TimeoutError: 파일이 시간 내에 ACTIVE 상태가 되지 않을 때.
+        """
+        if isinstance(video_paths, (str, os.PathLike)):
+            normalized_paths = [os.fspath(video_paths)]
+        else:
+            normalized_paths = [os.fspath(path) for path in video_paths]
+
+        normalized_paths = [path for path in normalized_paths if path]
+        if not normalized_paths:
+            raise ValueError("video_paths는 비어 있을 수 없습니다.")
+
+        parts: List[Dict[str, Any]] = []
+        for path in normalized_paths:
+            if not os.path.exists(path):
+                logger.error("비디오 파일을 찾을 수 없습니다: %s", path)
+                raise FileNotFoundError(f"비디오 파일을 찾을 수 없습니다: {path}")
+
+            logger.info("비디오 업로드 준비: %s", path)
+            upload_config = types.UploadFileConfig(displayName=os.path.basename(path))
+            uploaded = self.client.files.upload(file=path, config=upload_config)
+
+            file_name = getattr(uploaded, "name", None)
+            file_uri = getattr(uploaded, "uri", None) or getattr(uploaded, "file_uri", None)
+            mime_type = getattr(uploaded, "mime_type", None) or getattr(uploaded, "mimeType", None)
+
+            if not file_uri or not mime_type:
+                logger.error("업로드된 파일 메타데이터를 해석하지 못했습니다: %s", uploaded)
+                raise RuntimeError(f"업로드된 파일 메타데이터를 해석하지 못했습니다: {uploaded!r}")
+
+            logger.info("비디오 업로드 완료: %s (MIME: %s)", file_uri, mime_type)
+
+            # 파일이 ACTIVE 상태가 될 때까지 대기
+            logger.info("파일 처리 대기 중 (최대 %s초)...", max_wait_seconds)
+            start_time = time.time()
+
+            while True:
+                elapsed = time.time() - start_time
+
+                if elapsed > max_wait_seconds:
+                    raise TimeoutError(f"파일이 {max_wait_seconds}초 내에 ACTIVE 상태가 되지 않았습니다.")
+
+                # 파일 상태 확인
+                file_info = self.client.files.get(name=file_name)
+                state = getattr(file_info, "state", None)
+
+                logger.info("파일 상태: %s (경과 시간: %.1f초)", state, elapsed)
+
+                if state == "ACTIVE":
+                    logger.info("파일이 ACTIVE 상태가 되었습니다. 처리를 계속합니다.")
+                    break
+                elif state == "FAILED":
+                    raise RuntimeError(f"파일 처리가 실패했습니다: {file_info}")
+
+                # 2초 대기 후 재확인
+                time.sleep(2)
+
+            parts.append({"file_data": {"file_uri": file_uri, "mime_type": mime_type}})
+
+        return parts
 

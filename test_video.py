@@ -1,5 +1,4 @@
 from module.gemini_module import GeminiClient
-from google.genai import types
 import os
 import yt_dlp
 import argparse
@@ -8,101 +7,6 @@ import logging
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-
-class VideoTestClient(GeminiClient):
-    """
-    GeminiClient를 상속받아 비디오 인식 테스트 기능을 추가한 클래스
-    """
-
-    def prepare_video_parts(self, video_path, max_wait_seconds=300):
-        """
-        비디오 파일을 업로드하고 file_data 파트를 반환합니다.
-
-        Args:
-            video_path (str): 업로드할 비디오 파일 경로
-            max_wait_seconds (int): 파일이 ACTIVE 상태가 될 때까지 최대 대기 시간 (초)
-
-        Returns:
-            list: file_data 파트 리스트
-
-        Raises:
-            FileNotFoundError: 비디오 파일이 존재하지 않을 때
-            RuntimeError: 업로드된 파일 메타데이터를 해석하지 못했을 때
-            TimeoutError: 파일이 시간 내에 ACTIVE 상태가 되지 않을 때
-        """
-        import time
-
-        if not os.path.exists(video_path):
-            logger.error(f"비디오 파일을 찾을 수 없습니다: {video_path}")
-            raise FileNotFoundError(f"비디오 파일을 찾을 수 없습니다: {video_path}")
-
-        logger.info(f"비디오 업로드 준비: {video_path}")
-        upload_config = types.UploadFileConfig(displayName=os.path.basename(video_path))
-        uploaded = self.client.files.upload(file=video_path, config=upload_config)
-
-        file_name = getattr(uploaded, "name", None)
-        file_uri = getattr(uploaded, "uri", None) or getattr(uploaded, "file_uri", None)
-        mime_type = getattr(uploaded, "mime_type", None) or getattr(uploaded, "mimeType", None)
-
-        if not file_uri or not mime_type:
-            logger.error(f"업로드된 파일 메타데이터를 해석하지 못했습니다: {uploaded}")
-            raise RuntimeError(f"업로드된 파일 메타데이터를 해석하지 못했습니다: {uploaded!r}")
-
-        logger.info(f"비디오 업로드 완료: {file_uri} (MIME: {mime_type})")
-
-        # 파일이 ACTIVE 상태가 될 때까지 대기
-        logger.info(f"파일 처리 대기 중 (최대 {max_wait_seconds}초)...")
-        start_time = time.time()
-
-        while True:
-            elapsed = time.time() - start_time
-
-            if elapsed > max_wait_seconds:
-                raise TimeoutError(f"파일이 {max_wait_seconds}초 내에 ACTIVE 상태가 되지 않았습니다.")
-
-            # 파일 상태 확인
-            file_info = self.client.files.get(name=file_name)
-            state = getattr(file_info, "state", None)
-
-            logger.info(f"파일 상태: {state} (경과 시간: {elapsed:.1f}초)")
-
-            if state == "ACTIVE":
-                logger.info("파일이 ACTIVE 상태가 되었습니다. 처리를 계속합니다.")
-                break
-            elif state == "FAILED":
-                raise RuntimeError(f"파일 처리가 실패했습니다: {file_info}")
-
-            # 2초 대기 후 재확인
-            time.sleep(2)
-
-        return [{"file_data": {"file_uri": file_uri, "mime_type": mime_type}}]
-
-    def test_video_recognition(self, video_path, prompt="이 비디오의 내용을 자세히 설명해주세요."):
-        """
-        비디오를 업로드하고 내용 인식 테스트를 수행합니다.
-
-        Args:
-            video_path (str): 테스트할 비디오 파일 경로
-            prompt (str): Gemini에게 질문할 프롬프트
-
-        Returns:
-            str: Gemini의 응답
-        """
-        logger.info(f"비디오 인식 테스트 시작: {video_path}")
-
-        # 비디오 파일 업로드
-        parts = self.prepare_video_parts(video_path)
-
-        # 프롬프트 추가
-        if prompt:
-            parts.append({"text": prompt})
-
-        # Gemini에게 메시지 전송
-        response = self.send_message(message_parts=parts)
-
-        logger.info("비디오 인식 테스트 완료")
-        return response
 
 
 def download_youtube_video(url, output_path='./download_video'):
@@ -167,12 +71,12 @@ if __name__ == '__main__':
     print(f"{'='*60}\n")
 
     try:
-        # VideoTestClient 인스턴스 생성
-        client = VideoTestClient(api_key=args.api_key, model="gemini-2.0-flash-exp")
+        # GeminiClient 인스턴스 생성
+        client = GeminiClient(api_key=args.api_key, model="gemini-2.0-flash-exp")
         client.start_chat()
 
-        # 비디오 인식 테스트 실행
-        response = client.test_video_recognition(video_path, args.prompt)
+        # 비디오 인식 테스트 실행 (통합 메서드 send_message 사용)
+        response = client.send_message(args.prompt, video_paths=video_path)
 
         # 결과 출력
         print(f"\n{'='*60}")

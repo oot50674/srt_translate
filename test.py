@@ -45,7 +45,7 @@ def analyze_snapshots(youtube_url: str, count: int, prompt: str, keep: bool) -> 
     client.start_chat()
 
     print("[2/3] Gemini에 이미지 분석을 요청합니다...")
-    response = client.send_image_prompt(snapshots, prompt=prompt)
+    response = client.send_message(prompt, image_paths=snapshots)
 
     print("[3/3] 모델 응답:")
     print("-" * 60)

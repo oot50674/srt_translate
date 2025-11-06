@@ -6,6 +6,7 @@
 /logs
 /docs
 /snapshots
+/download_video
 /.claude
 AGENTS.md
 *.pyc

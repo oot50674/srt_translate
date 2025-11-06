@@ -243,7 +243,7 @@ def translate_srt_stream(content: str, client, target_lang: str = '한국어', b
         chunk_counter += 1
 
         chunk_prompt_base = base_user_prompt
-        chunk_image_parts: Optional[List[Dict[str, Any]]] = None
+        chunk_image_paths: Optional[List[str]] = None
         chunk_context_text: Optional[str] = None
 
         if video_stream_url and video_duration and snapshot_session_dir:
@@ -265,7 +265,7 @@ def translate_srt_stream(content: str, client, target_lang: str = '한국어', b
                     "영상의 주요 등장인물, 사건, 분위기를 한국어로 요약하고, "
                     "번역 시 주의해야 할 맥락이나 용어를 정리해 주세요."
                 )
-                chunk_image_parts = client.prepare_image_parts(snapshot_paths)
+                chunk_image_paths = snapshot_paths
                 chunk_context_text = (
                     f"[영상 청크 #{chunk_counter} 이미지 컨텍스트]\n"
                     f"- 엔트리 수: {entry_count}\n"
@@ -273,13 +273,13 @@ def translate_srt_stream(content: str, client, target_lang: str = '한국어', b
                     "위 스냅샷을 참고하여 주요 등장인물, 장면 분위기, 시각적 단서를 고려한 번역 결과를 생성하세요."
                 )
                 logger.info(
-                    "청크 %s 이미지 %s장 업로드 및 컨텍스트 준비 완료",
+                    "청크 %s 이미지 %s장 경로 준비 완료",
                     chunk_counter,
-                    len(chunk_image_parts),
+                    len(chunk_image_paths),
                 )
             except Exception as exc:
                 logger.error("청크 %s 스냅샷 처리 실패: %s", chunk_counter, exc)
-                chunk_image_parts = None
+                chunk_image_paths = None
                 chunk_context_text = None
 
         prompt = build_translation_prompt(chunk_prompt_base, target_lang, batch)
@@ -349,18 +349,11 @@ def translate_srt_stream(content: str, client, target_lang: str = '한국어', b
                 processed_indices = set()
                 batch_translations: Dict[int, str] = {}
 
-                # response_schema를 사용하여 스트리밍 요청
-                stream_message = prompt
-                stream_parts = None
-                if chunk_image_parts:
-                    stream_parts = list(chunk_image_parts)
-                    stream_parts.append({'text': prompt})
-                    stream_message = ""
-
+                # response_schema를 사용하여 스트리밍 요청 (통합 메서드 사용)
                 stream_iterator = client.send_message_stream(
-                    stream_message,
+                    prompt,
                     response_schema=response_schema,
-                    message_parts=stream_parts,
+                    image_paths=chunk_image_paths,
                 )
 
                 for chunk in stream_iterator:
