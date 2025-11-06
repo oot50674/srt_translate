@@ -214,6 +214,9 @@ $(async function () {
             formData.append('context_limit', '');
         }
         formData.append('model', progressData.model || storedModelName);
+        if (progressData.youtube_url) {
+            formData.append('youtube_url', progressData.youtube_url);
+        }
         formData.append('job_id', jobId); // 기존 호환 (사용 안할 수도 있음)
 
         let response;

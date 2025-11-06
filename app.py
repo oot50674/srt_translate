@@ -6,10 +6,11 @@ import time
 import uuid
 from datetime import datetime
 import re
+import shutil
 from typing import Optional, Dict, List, Any
 from flask import Flask, render_template, request, jsonify, Response
 from dotenv import load_dotenv, set_key
-from module import srt_module
+from module import srt_module, ffmpeg_module
 from module.gemini_module import GeminiClient
 from module.database_module import (
     list_presets,
@@ -516,6 +517,7 @@ def api_create_job():
         save_api_key_to_env(api_key)
     # 모델 이름 처리 (기본값 DEFAULT_MODEL)
     model_name = (request.form.get('model') or '').strip() or DEFAULT_MODEL
+    youtube_url = (request.form.get('youtube_url') or '').strip()
     # 작업 데이터 구성
     job_data = {
         'files': files_data,
@@ -525,7 +527,8 @@ def api_create_job():
         'thinking_budget': thinking_budget,
         'context_compression': context_compression,
         'context_limit': context_limit,
-        'model': model_name
+        'model': model_name,
+        'youtube_url': youtube_url,
     }
     # 작업 데이터를 DB에 저장
     save_job(job_id, job_data) # type: ignore
@@ -580,6 +583,7 @@ def upload_srt():
     except (ValueError, TypeError):
         batch_size = 10
     user_prompt = request.form.get('custom_prompt', '')
+    youtube_url = (request.form.get('youtube_url') or '').strip()
     thinking_budget = request.form.get('thinking_budget', 0)
     api_key = (request.form.get('api_key') or '').strip()
     model_name = (request.form.get('model') or '').strip() or DEFAULT_MODEL
@@ -652,10 +656,61 @@ def upload_srt():
     
     logger.info("다중 파일 처리를 위한 공유 클라이언트가 생성되었습니다.")
 
+    video_context_summary: Optional[str] = None
+    if youtube_url:
+        snapshot_dir: Optional[str] = None
+        try:
+            logger.info("유튜브 링크 감지, 스냅샷 분석 시작: %s", youtube_url)
+            snapshot_dir = tempfile.mkdtemp(prefix="yt_snapshots_")
+            snapshot_paths = ffmpeg_module.snapshots_from_youtube(
+                youtube_url,
+                count=5,
+                out_dir=snapshot_dir,
+            )
+            if snapshot_paths:
+                summary_prompt_text = (
+                    "다음 이미지는 번역할 유튜브 영상의 주요 장면입니다. "
+                    "영상의 등장인물, 배경, 분위기, 주요 사건을 한국어로 간단히 요약하고, "
+                    "자막 번역 시 주의해야 할 맥락이나 용어를 정리해 주세요."
+                )
+                video_context_summary = (shared_client.send_image_prompt(
+                    snapshot_paths,
+                    prompt=summary_prompt_text,
+                ) or "").strip()
+                if video_context_summary:
+                    logger.info(
+                        "영상 맥락 요약 생성 완료 (문자 수: %d)",
+                        len(video_context_summary),
+                    )
+                else:
+                    logger.warning("영상 맥락 요약이 비어 있습니다.")
+            else:
+                logger.warning("생성된 스냅샷이 없어 맥락 분석을 건너뜁니다.")
+        except Exception as exc:
+            logger.error("유튜브 스냅샷 처리 중 오류: %s", exc)
+        finally:
+            if snapshot_dir:
+                try:
+                    shutil.rmtree(snapshot_dir, ignore_errors=True)
+                except Exception as cleanup_exc:
+                    logger.warning("스냅샷 임시 디렉터리 삭제 실패: %s", cleanup_exc)
+
+        if video_context_summary:
+            context_instruction = (
+                "위 유튜브 영상 장면 요약을 참고하여 자막을 자연스럽고 일관된 톤으로 번역하세요."
+            )
+            user_prompt = (
+                f"{context_instruction}\n\n{user_prompt}".strip()
+                if user_prompt else
+                context_instruction
+            )
+
     def generate():
         try:
             # 총 파일 수 전송
             yield json.dumps({'total_files': len(temp_paths)}) + "\n"
+            if video_context_summary:
+                yield json.dumps({'video_context_summary': video_context_summary}, ensure_ascii=False) + "\n"
             
             for name, path in temp_paths:
                 # 중단 플래그 확인

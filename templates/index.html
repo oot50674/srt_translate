@@ -77,6 +77,11 @@
                                         <textarea id="srt-text" name="srt_text" class="form-input flex w-full min-w-0 flex-1 resize-y overflow-hidden rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#0c77f2] border border-slate-300 bg-slate-50 focus:border-[#0c77f2] min-h-48 placeholder:text-slate-400 p-4 text-sm font-normal leading-normal" placeholder="자막 텍스트를 여기에 붙여넣으세요 (예: SRT 파일에서)"></textarea>
                                     </div>
                                 </div>
+                                <div class="mt-6">
+                                    <label for="youtube-url" class="block text-sm font-medium text-slate-700 mb-1">YouTube 링크 (선택)</label>
+                                    <input type="url" id="youtube-url" class="form-input w-full rounded-md border-slate-300" placeholder="https://www.youtube.com/watch?v=..." />
+                                    <p class="text-xs text-slate-500 mt-1">유튜브 영상 링크를 제공하면 주요 장면 스냅샷을 분석해 맥락을 반영합니다.</p>
+                                </div>
                                 <div class="mt-6 flex flex-col gap-4">
                                     <h3 class="text-slate-800 text-lg font-semibold">번역 설정</h3>
                                     <div class="grid grid-cols-1 md:grid-cols-3 gap-4">

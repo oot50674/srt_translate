@@ -31,6 +31,7 @@ $(function () {
     const $contextCompressionCheckbox = $('#context-compression');
     const $contextLimitInput = $('#context-limit');
     const $rpmLimitInput = $('#rpm-limit');
+    const $youtubeUrlInput = $('#youtube-url');
     const SETTINGS_PANEL_STORAGE_KEY = 'settingsPanelOpen';
     const LAST_PRESET_COOKIE_KEY = 'lastUsedPreset';
     const $configSaveIndicator = $('#config-save-indicator');
@@ -647,24 +648,25 @@ $(function () {
             const tbValue = $thinkingBudgetInput.val().trim().toLowerCase();
             let thinking_budget_str;
             if ($disableThinkingCheckbox.is(':checked')) {
-            thinking_budget_str = '0';
+                thinking_budget_str = '0';
             } else if (tbValue === 'auto') {
-            thinking_budget_str = '-1';
+                thinking_budget_str = '-1';
             } else {
-            thinking_budget_str = $thinkingBudgetInput.val() || '';
+                thinking_budget_str = $thinkingBudgetInput.val() || '';
             }
 
             // 번역 옵션 객체 생성
             const options = {
-            target_lang: $targetLangInput.val() || '',
-            batch_size: $chunkSizeInput.val() || '',
-            custom_prompt: $customPromptInput.val() || '',
-            thinking_budget: thinking_budget_str,
-            // Context compression 옵션
-            context_compression: $contextCompressionCheckbox.length ? ($contextCompressionCheckbox.is(':checked') ? '1' : '0') : '0',
-            context_limit: $contextLimitInput.length ? $contextLimitInput.val() || '' : '',
-            api_key: $apiKeyInput.length ? $apiKeyInput.val() || '' : '',
-            model: $modelInput.length ? $modelInput.val().trim() : ''
+                target_lang: $targetLangInput.val() || '',
+                batch_size: $chunkSizeInput.val() || '',
+                custom_prompt: $customPromptInput.val() || '',
+                thinking_budget: thinking_budget_str,
+                youtube_url: $youtubeUrlInput.length ? ($youtubeUrlInput.val() || '').trim() : '',
+                // Context compression 옵션
+                context_compression: $contextCompressionCheckbox.length ? ($contextCompressionCheckbox.is(':checked') ? '1' : '0') : '0',
+                context_limit: $contextLimitInput.length ? $contextLimitInput.val() || '' : '',
+                api_key: $apiKeyInput.length ? $apiKeyInput.val() || '' : '',
+                model: $modelInput.length ? $modelInput.val().trim() : ''
             };
             
             // FormData 객체 생성 및 SRT 데이터 추가 (텍스트 또는 파일)
@@ -685,6 +687,7 @@ $(function () {
             formData.append('batch_size', options.batch_size);
             formData.append('custom_prompt', options.custom_prompt);
             formData.append('thinking_budget', options.thinking_budget);
+            formData.append('youtube_url', options.youtube_url);
             formData.append('context_compression', options.context_compression);
             formData.append('context_limit', options.context_limit);
             formData.append('api_key', options.api_key);
