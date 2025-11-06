@@ -649,6 +649,7 @@ def upload_srt():
         )
     
     shared_client.start_chat()
+    
     logger.info("다중 파일 처리를 위한 공유 클라이언트가 생성되었습니다.")
 
     def generate():
