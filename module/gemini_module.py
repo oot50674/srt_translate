@@ -1,7 +1,8 @@
 import os
 import time
+import copy
 from collections import deque
-from typing import Iterator, Dict, Any, Optional, List, Union, Sequence, cast
+from typing import Iterator, Dict, Any, Optional, List, Union, Sequence, cast, Set, Tuple
 import logging
 from google import genai
 from google.genai import types
@@ -301,6 +302,27 @@ class GeminiClient:
                 limit,
             )
 
+    def _collect_file_parts(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """대상 메시지들에서 중복되지 않는 파일 참조 파트를 추출합니다."""
+        collected: List[Dict[str, Any]] = []
+        seen: Set[Tuple[str, Optional[str]]] = set()
+        for msg in messages:
+            parts = msg.get('parts') or []
+            for part in parts:
+                file_data = part.get('file_data')
+                if not file_data:
+                    continue
+                uri = file_data.get('file_uri')
+                if not uri:
+                    continue
+                mime = file_data.get('mime_type')
+                key = (uri, mime)
+                if key in seen:
+                    continue
+                seen.add(key)
+                collected.append({'file_data': copy.deepcopy(file_data)})
+        return collected
+
     def _compress_history_once(self, keep_turns: int) -> bool:
         """히스토리의 오래된 부분을 요약 메시지로 대체합니다."""
         if not self.history:
@@ -330,13 +352,27 @@ class GeminiClient:
         if self._reconstructed_block:
             summary_text = f"{summary_text}\n\n{self._reconstructed_block}".rstrip()
 
+        retained_file_parts = self._collect_file_parts(compress_candidates)
+        retained_context_messages: List[Dict[str, Any]] = []
+        if retained_file_parts:
+            retained_parts_with_note = retained_file_parts + [{
+                'text': "이전 단계에서 업로드된 이미지 컨텍스트를 유지합니다."
+            }]
+            retained_context_messages.append({
+                'role': 'user',
+                'parts': retained_parts_with_note
+            })
+
         summary_message = {
             'role': 'model',
             'parts': [{'text': f"{self._context_summary_prefix}\n{summary_text}"}]
         }
 
         before_tokens = self._estimate_history_tokens()
-        new_history: List[Dict[str, Any]] = [summary_message]
+        new_history: List[Dict[str, Any]] = []
+        if retained_context_messages:
+            new_history.extend(retained_context_messages)
+        new_history.append(summary_message)
         new_history.extend(preserved_history)
         self.history = new_history
         after_tokens = self._estimate_history_tokens()
