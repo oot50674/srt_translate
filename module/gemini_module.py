@@ -1,7 +1,7 @@
 import os
 import time
 from collections import deque
-from typing import Iterator, Dict, Any, Optional, List, Union, cast
+from typing import Iterator, Dict, Any, Optional, List, Union, Sequence, cast
 import logging
 from google import genai
 from google.genai import types
@@ -900,3 +900,101 @@ class GeminiClient:
             # 스키마가 없고 MIME 타입도 지정하지 않았으면 제거
             self.generation_config.pop('response_mime_type', None)
             self.default_response_mime_type = None
+
+    def send_image_prompt(
+        self,
+        image_paths: Union[str, os.PathLike[str], Sequence[Union[str, os.PathLike[str]]]],
+        *,
+        prompt: str = "각 이미지에 대한 설명을 작성해 주세요.",
+        model: Optional[str] = None,
+    ) -> str:
+        """
+        하나 이상의 이미지 파일을 업로드하고, 프롬프트와 함께 멀티모달 요청을 수행합니다.
+
+        Args:
+            image_paths (str | os.PathLike | Sequence[str | os.PathLike]):
+                업로드할 이미지 경로 또는 경로 리스트.
+            prompt (str): 이미지에 대해 모델이 응답할 지시문.
+            model (str, optional): 사용할 모델. 지정하지 않으면 기본 모델 사용.
+
+        Returns:
+            str: 모델의 응답 텍스트.
+
+        Raises:
+            FileNotFoundError: 이미지 경로가 존재하지 않을 때.
+            ValueError: 이미지 경로 목록이 비어 있을 때.
+            google_exceptions.GoogleAPICallError: API 호출에 실패한 경우.
+            Exception: 그 외 예상치 못한 오류가 발생한 경우.
+        """
+        if isinstance(image_paths, (str, os.PathLike)):
+            normalized_paths = [os.fspath(image_paths)]
+        else:
+            normalized_paths = [os.fspath(path) for path in image_paths]
+
+        normalized_paths = [path for path in normalized_paths if path]
+        if not normalized_paths:
+            raise ValueError("image_paths는 비어 있을 수 없습니다.")
+
+        parts: List[Dict[str, Any]] = []
+        for path in normalized_paths:
+            if not os.path.exists(path):
+                logger.error("이미지 파일을 찾을 수 없습니다: %s", path)
+                raise FileNotFoundError(f"이미지 파일을 찾을 수 없습니다: {path}")
+
+            logger.info("멀티모달 요청을 위해 이미지 업로드: %s", path)
+            upload_config = types.UploadFileConfig(displayName=os.path.basename(path))
+            uploaded = self.client.files.upload(file=path, config=upload_config)
+            file_uri = getattr(uploaded, "uri", None) or getattr(uploaded, "file_uri", None)
+            mime_type = getattr(uploaded, "mime_type", None) or getattr(uploaded, "mimeType", None)
+            if not file_uri or not mime_type:
+                logger.error("업로드된 파일 메타데이터를 해석하지 못했습니다: %s", uploaded)
+                raise RuntimeError(f"업로드된 파일 메타데이터를 해석하지 못했습니다: {uploaded!r}")
+
+            parts.append({"file_data": {"file_uri": file_uri, "mime_type": mime_type}})
+
+        self._prepare_history_for_new_message(prompt or "")
+        self._check_rpm_limit()
+
+        if prompt:
+            parts.append({"text": prompt})
+
+        user_message = {"role": "user", "parts": parts}
+        self.history.append(user_message)
+
+        prompt_tokens_estimate = self._estimate_history_tokens()
+
+        try:
+            request_config = self.generation_config.copy()
+            config_payload = types.GenerateContentConfig(**request_config)
+            response = self.client.models.generate_content(
+                model=model or self.model,
+                contents=self.history,
+                config=config_payload,
+            )
+
+            response_text = (response.text or "").strip()
+            model_response = {"role": "model", "parts": [{"text": response_text}]}
+            self.history.append(model_response)
+
+            model_tokens_estimate = self._estimate_text_tokens(response_text)
+            self._token_usage_total += prompt_tokens_estimate + model_tokens_estimate
+            history_tokens = self._estimate_history_tokens()
+            token_limit = self.context_limit_tokens if self.context_compression_enabled else '∞'
+            logger.info(
+                "이미지 프롬프트 전송 완료. 업로드 이미지 수: %s, 요청 토큰: %s, 응답 추정 토큰: %s, 히스토리 추정 토큰: %s/%s",
+                len(normalized_paths),
+                prompt_tokens_estimate,
+                model_tokens_estimate,
+                history_tokens,
+                token_limit,
+            )
+            return response_text
+
+        except errors.APIError as e:
+            self.history.pop()
+            logger.error("Google API 호출 오류(이미지 프롬프트): %s", e)
+            raise
+        except Exception as e:
+            self.history.pop()
+            logger.error("이미지 프롬프트 처리 중 오류: %s", e)
+            raise
