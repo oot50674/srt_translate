@@ -56,9 +56,12 @@ def _srt_timestamp_to_seconds(value: str) -> float:
         return 0.0
 
 def _calculate_snapshot_count(entry_count: int) -> int:
-    """청크 엔트리 수에 기반한 스냅샷 개수를 계산합니다."""
-    base = 1 + max(0, entry_count // 10)
-    return max(base, 1)
+    """청크 엔트리 수에 기반한 스냅샷 개수를 계산합니다.
+
+    기본 1개, 10개 초과 시 10개당 1개 추가.
+    예: 1-10개 → 1장, 11-20개 → 2장, 21-30개 → 3장, 50개 → 5장
+    """
+    return 1 + max(0, (entry_count - 10) // 10)
 
 def _compute_chunk_time_bounds(subtitles: List[Dict[str, Any]]) -> tuple[float, float]:
     """청크 자막들의 시작/종료 시간을 초 단위로 계산합니다."""
