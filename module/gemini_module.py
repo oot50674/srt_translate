@@ -129,7 +129,10 @@ class GeminiClient:
                 default_generation_config['thinking_config'] = types.ThinkingConfig(
                     thinking_budget=thinking_budget,
                 )
-                logger.info(f"Thinking Budget 설정: {thinking_budget}")
+                if thinking_budget == -1:
+                    logger.info("Thinking Budget 설정: auto (-1 전달)")
+                else:
+                    logger.info(f"Thinking Budget 설정: {thinking_budget}")
             else:
                 logger.info("Thinking Budget이 auto로 설정되었습니다 (thinking_config 미사용)")
             
@@ -163,6 +166,8 @@ class GeminiClient:
             logger.info(f"RPM 제한: {self.rpm_limit}")
             if thinking_budget is None:
                 logger.info("Thinking Budget: auto (자동)")
+            elif thinking_budget == -1:
+                logger.info("Thinking Budget: auto (-1 전달)")
             else:
                 logger.info(f"Thinking Budget: {thinking_budget}")
             if response_schema:
