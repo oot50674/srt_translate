@@ -582,6 +582,7 @@ class SubtitleJob:
     entry_index_map: Dict[int, Dict[str, Any]] = field(default_factory=dict)
     logs: List[Dict[str, Any]] = field(default_factory=list)
     failed_segments: List[int] = field(default_factory=list)
+    stop_requested: bool = False
 
     def progress(self) -> float:
         if self.total_segments <= 0:
@@ -612,6 +613,7 @@ class SubtitleJob:
             "segments": [segment.to_dict() for segment in self.segments],
             "logs": list(self.logs),
             "failed_segments": list(self.failed_segments),
+            "stop_requested": self.stop_requested,
         }
 
     def append_log(self, text: str, level: str = "info") -> None:
@@ -658,6 +660,22 @@ def get_segment_path(job_id: str, segment_index: int) -> Optional[str]:
         if segment.index == segment_index:
             return segment.file_path if os.path.isfile(segment.file_path) else None
     return None
+
+
+def request_stop(job_id: str) -> bool:
+    with _LOCK:
+        job = _JOBS.get(job_id)
+        if not job:
+            return False
+        if job.status in {"completed", "failed", "cancelled"}:
+            return False
+        already_requested = job.stop_requested
+        job.stop_requested = True
+
+    if not already_requested:
+        job.append_log("사용자가 작업 중지를 요청했습니다.", level="warning")
+        _update_job(job, phase="stopping", message="작업 중지 요청을 처리하고 있습니다.")
+    return True
 
 
 def _update_job(job: SubtitleJob, *, status: Optional[str] = None, phase: Optional[str] = None,
@@ -941,6 +959,13 @@ def _process_segment(
     return started_at
 
 
+def _mark_segments_cancelled(job: SubtitleJob) -> None:
+    for segment in job.segments:
+        if segment.status not in {"completed", "error", "cancelled"}:
+            segment.status = "cancelled"
+            segment.message = "사용자 요청으로 중지됨"
+
+
 def _run_job(job: SubtitleJob, youtube_url: Optional[str], uploaded_path: Optional[str], srt_path: Optional[str] = None) -> None:
     try:
         _update_job(job, status="running", phase="source", message="영상 소스를 준비하는 중입니다.")
@@ -993,6 +1018,11 @@ def _run_job(job: SubtitleJob, youtube_url: Optional[str], uploaded_path: Option
         task_label = "번역" if job.mode == "translate" else "전사"
 
         for segment in job.segments:
+            if job.stop_requested:
+                job.append_log("사용자 요청으로 작업을 중지합니다.", level="warning")
+                _mark_segments_cancelled(job)
+                _update_job(job, status="cancelled", phase="stopped", message="사용자 요청으로 작업이 중지되었습니다.")
+                return
             last_segment_start_at = _process_segment(
                 job,
                 client,
@@ -1003,6 +1033,12 @@ def _run_job(job: SubtitleJob, youtube_url: Optional[str], uploaded_path: Option
                 is_retry=False,
             )
 
+        if job.stop_requested:
+            job.append_log("사용자 요청으로 작업을 중지합니다.", level="warning")
+            _mark_segments_cancelled(job)
+            _update_job(job, status="cancelled", phase="stopped", message="사용자 요청으로 작업이 중지되었습니다.")
+            return
+
         initial_failures = sorted(job.failed_segments)
         if initial_failures:
             failure_list_text = ", ".join(str(idx) for idx in initial_failures)
@@ -1012,6 +1048,11 @@ def _run_job(job: SubtitleJob, youtube_url: Optional[str], uploaded_path: Option
                 segment = next((seg for seg in job.segments if seg.index == segment_index), None)
                 if not segment:
                     continue
+                if job.stop_requested:
+                    job.append_log("재시도 중 사용자 요청으로 작업을 중지합니다.", level="warning")
+                    _mark_segments_cancelled(job)
+                    _update_job(job, status="cancelled", phase="stopped", message="사용자 요청으로 작업이 중지되었습니다.")
+                    return
                 last_segment_start_at = _process_segment(
                     job,
                     client,
@@ -1021,6 +1062,11 @@ def _run_job(job: SubtitleJob, youtube_url: Optional[str], uploaded_path: Option
                     allow_processed_increment=False,
                     is_retry=True,
                 )
+            if job.stop_requested:
+                job.append_log("재시도 중 사용자 요청으로 작업을 중지합니다.", level="warning")
+                _mark_segments_cancelled(job)
+                _update_job(job, status="cancelled", phase="stopped", message="사용자 요청으로 작업이 중지되었습니다.")
+                return
             if job.failed_segments:
                 remaining_text = ", ".join(str(idx) for idx in job.failed_segments)
                 job.append_log(f"재시도에도 실패한 세그먼트: {remaining_text}", level="warning")
@@ -1052,4 +1098,5 @@ __all__ = [
     "get_job_data",
     "get_transcript_path",
     "get_segment_path",
+    "request_stop",
 ]

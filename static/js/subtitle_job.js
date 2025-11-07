@@ -8,15 +8,17 @@
         pending: 'bg-slate-200 text-slate-700',
         running: 'bg-blue-100 text-blue-800',
         completed: 'bg-green-100 text-green-800',
-        failed: 'bg-red-100 text-red-800'
+        failed: 'bg-red-100 text-red-800',
+        cancelled: 'bg-amber-100 text-amber-700'
     };
     const SEGMENT_STATUS_STYLES = {
         pending: 'bg-slate-100 text-slate-600',
         processing: 'bg-amber-100 text-amber-700',
         completed: 'bg-green-100 text-green-800',
-        error: 'bg-red-100 text-red-700'
+        error: 'bg-red-100 text-red-700',
+        cancelled: 'bg-amber-50 text-amber-700'
     };
-    const TERMINAL_STATES = new Set(['completed', 'failed']);
+    const TERMINAL_STATES = new Set(['completed', 'failed', 'cancelled']);
     const POLL_INTERVAL = 4000;
 
     const statusPill = document.getElementById('job-status-pill');
@@ -31,6 +33,7 @@
     const logList = document.getElementById('job-log');
     const refreshBtn = document.getElementById('refresh-btn');
     const downloadSrtLink = document.getElementById('download-srt');
+    const stopBtn = document.getElementById('stop-job-btn');
 
     let pollTimer = null;
     let terminalReached = false;
@@ -154,6 +157,23 @@
         }
     }
 
+    function toggleStopButton(job) {
+        if (!stopBtn) return;
+        if (TERMINAL_STATES.has(job.status)) {
+            stopBtn.disabled = true;
+            stopBtn.textContent = job.status === 'cancelled' ? '작업 중지됨' : '작업 종료';
+            stopBtn.classList.add('opacity-60', 'cursor-not-allowed');
+        } else if (job.stop_requested) {
+            stopBtn.disabled = true;
+            stopBtn.textContent = '중지 요청됨';
+            stopBtn.classList.add('opacity-60', 'cursor-not-allowed');
+        } else {
+            stopBtn.disabled = false;
+            stopBtn.textContent = '작업 중지';
+            stopBtn.classList.remove('opacity-60', 'cursor-not-allowed');
+        }
+    }
+
     function updateJob(job) {
         const percent = Math.round((job.progress || 0) * 100);
         progressText.textContent = `${percent}%`;
@@ -166,11 +186,16 @@
         renderSegments(job.segments, job);
         renderLogs(job.logs);
         toggleDownload(job);
+        toggleStopButton(job);
 
         if (job.status === 'failed' && job.error) {
             setAlert(job.error, 'error');
+        } else if (job.status === 'cancelled') {
+            setAlert(job.message || '작업이 중지되었습니다.', 'warning');
         } else if (job.status === 'completed') {
             setAlert('작업이 완료되었습니다.', 'success');
+        } else if (job.stop_requested) {
+            setAlert('사용자 요청에 따라 작업 중지를 준비하고 있습니다.', 'warning');
         } else {
             setAlert('');
         }
@@ -202,6 +227,34 @@
         if (pollTimer) clearTimeout(pollTimer);
         terminalReached = false;
         fetchJob();
+    });
+
+    stopBtn?.addEventListener('click', async () => {
+        if (stopBtn.disabled) return;
+        const confirmed = window.confirm('현재 작업을 중지할까요? 진행 중인 세그먼트 이후의 작업은 중단됩니다.');
+        if (!confirmed) return;
+        stopBtn.disabled = true;
+        stopBtn.textContent = '중지 요청 중...';
+        stopBtn.classList.add('opacity-60', 'cursor-not-allowed');
+        try {
+            const res = await fetch(`/api/subtitle/jobs/${encodeURIComponent(jobId)}/stop`, {
+                method: 'POST'
+            });
+            if (!res.ok) {
+                const payload = await res.json().catch(() => ({}));
+                throw new Error(payload.error || '작업 중지 요청에 실패했습니다.');
+            }
+            setAlert('작업 중지 요청을 보냈습니다. 잠시만 기다려 주세요.', 'warning');
+            if (pollTimer) clearTimeout(pollTimer);
+            terminalReached = false;
+            fetchJob();
+        } catch (err) {
+            console.error(err);
+            stopBtn.disabled = false;
+            stopBtn.textContent = '작업 중지';
+            stopBtn.classList.remove('opacity-60', 'cursor-not-allowed');
+            setAlert(err.message || '작업 중지 요청에 실패했습니다.', 'error');
+        }
     });
 
     fetchJob();

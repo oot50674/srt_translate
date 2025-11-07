@@ -13,6 +13,7 @@ from module.subtitle_generation import (
     get_job_data as get_subtitle_job,
     get_transcript_path as get_subtitle_transcript_path,
     get_segment_path as get_subtitle_segment_path,
+    request_stop as stop_subtitle_job,
 )
 from module.database_module import (
     list_presets,
@@ -208,6 +209,13 @@ def api_download_subtitle_segment(job_id: str, segment_index: int):
     if not path:
         return jsonify({'error': 'not found'}), 404
     return send_file(path, as_attachment=True, download_name=os.path.basename(path))
+
+
+@app.route('/api/subtitle/jobs/<job_id>/stop', methods=['POST'])
+def api_stop_subtitle_generation_job(job_id: str):
+    if not stop_subtitle_job(job_id):
+        return jsonify({'error': '중지할 작업을 찾을 수 없거나 이미 종료되었습니다.'}), 400
+    return jsonify({'status': 'stopping'})
 
 @app.route('/api/jobs', methods=['POST'])
 def api_create_job():
