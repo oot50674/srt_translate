@@ -15,7 +15,7 @@ from werkzeug.utils import secure_filename
 from yt_dlp import YoutubeDL
 
 from constants import BASE_DIR, DEFAULT_MODEL
-from module import ffmpeg_module
+from module import ffmpeg_module, srt_module
 from module.gemini_module import GeminiClient
 from module.video_split import SegmentMetadata, split_video_by_minutes, DEFAULT_STORAGE_KEY
 from module.Whisper_util import transcribe_audio_with_timestamps
@@ -223,6 +223,106 @@ def _generate_whisper_segments(segment: SegmentState, language_hint: Optional[st
             }
         )
     return formatted
+
+
+def _srt_timestamp_to_seconds(timestamp: str) -> float:
+    """SRT 타임스탬프(HH:MM:SS,mmm)를 초 단위로 변환합니다."""
+    # 00:00:01,500 -> 1.5
+    try:
+        time_part, ms_part = timestamp.split(',')
+        h, m, s = time_part.split(':')
+        total_seconds = int(h) * 3600 + int(m) * 60 + int(s) + int(ms_part) / 1000.0
+        return total_seconds
+    except (ValueError, AttributeError):
+        return 0.0
+
+
+def _create_segments_from_srt(job: "SubtitleJob", srt_path: str) -> List[SegmentMetadata]:
+    """업로드된 SRT 파일의 타임스탬프를 기준으로 세그먼트를 생성합니다.
+
+    SRT 엔트리들을 chunk_minutes 단위로 그룹화하여 세그먼트를 만들고,
+    각 세그먼트에 대해 FFmpeg로 비디오를 분할합니다.
+    """
+    # SRT 파일 파싱
+    subtitles = srt_module.read_srt(srt_path)
+    if not subtitles:
+        raise ValueError("SRT 파일에 자막이 없습니다.")
+
+    # 타임스탬프를 초 단위로 변환
+    speech_segments = []
+    for subtitle in subtitles:
+        start_sec = _srt_timestamp_to_seconds(subtitle['start'])
+        end_sec = _srt_timestamp_to_seconds(subtitle['end'])
+        speech_segments.append({
+            'start': start_sec,
+            'end': end_sec,
+        })
+
+    # 세그먼트 그룹화 (chunk_minutes 단위로)
+    max_duration = job.chunk_minutes * 60.0
+    groups: List[List[Dict[str, float]]] = []
+    current_group: List[Dict[str, float]] = []
+    group_start: Optional[float] = None
+
+    for seg in speech_segments:
+        if group_start is None:
+            group_start = seg['start']
+
+        # 현재 세그먼트를 추가했을 때 그룹 시간이 max_duration을 초과하는지 확인
+        potential_end = seg['end']
+        if potential_end - group_start > max_duration and current_group:
+            # 현재 그룹을 저장하고 새 그룹 시작
+            groups.append(current_group)
+            current_group = [seg]
+            group_start = seg['start']
+        else:
+            current_group.append(seg)
+
+    # 마지막 그룹 추가
+    if current_group:
+        groups.append(current_group)
+
+    # 각 그룹에 대해 비디오 분할 및 SegmentMetadata 생성
+    segments_metadata: List[SegmentMetadata] = []
+    for idx, group in enumerate(groups):
+        start_time = group[0]['start']
+        end_time = group[-1]['end']
+        duration = end_time - start_time
+
+        # FFmpeg로 비디오 분할
+        segment_filename = f"segment_{idx:04d}.mp4"
+        segment_path = os.path.join(job.chunks_dir, segment_filename)
+
+        # FFmpeg 명령어 실행
+        cmd = [
+            ffmpeg_module.get_ffmpeg_path(),
+            '-i', job.source_path,
+            '-ss', str(start_time),
+            '-t', str(duration),
+            '-c', 'copy',
+            '-y',
+            segment_path
+        ]
+        import subprocess
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            logger.error(f"FFmpeg 분할 실패: {result.stderr}")
+            raise RuntimeError(f"세그먼트 {idx} 분할 실패")
+
+        # SegmentMetadata 생성
+        metadata = SegmentMetadata(
+            index=idx,
+            file_path=segment_path,
+            start_time=start_time,
+            end_time=end_time,
+            duration=duration,
+            speech_segments=[{'start': seg['start'] - start_time, 'end': seg['end'] - start_time} for seg in group]
+        )
+        segments_metadata.append(metadata)
+
+        job.append_log(f"세그먼트 {idx}: {start_time:.2f}s ~ {end_time:.2f}s ({len(group)}개 자막)")
+
+    return segments_metadata
 
 
 def _download_youtube_video(url: str, output_dir: str) -> str:
@@ -479,6 +579,7 @@ def start_job(
     *,
     youtube_url: Optional[str],
     uploaded_file: Optional["FileStorage"],
+    srt_file: Optional["FileStorage"],
     chunk_minutes: float,
     mode: str,
     target_language: Optional[str],
@@ -493,13 +594,18 @@ def start_job(
         raise ValueError("영상 파일 또는 YouTube 링크 중 하나가 필요합니다.")
     if not os.environ.get("GOOGLE_API_KEY"):
         raise ValueError("Google API Key가 설정되지 않았습니다.")
+    if srt_file and srt_file.filename and not (uploaded_file and uploaded_file.filename):
+        raise ValueError("SRT 파일을 사용하려면 영상 파일도 함께 업로드해야 합니다.")
 
     job_id = uuid.uuid4().hex
     output_dir = _ensure_dir(os.path.join(SUBTITLE_JOB_ROOT, job_id))
     chunks_dir = _ensure_dir(os.path.join(output_dir, "segments"))
     uploaded_path: Optional[str] = None
+    srt_path: Optional[str] = None
     if uploaded_file and uploaded_file.filename:
         uploaded_path = _save_uploaded_file(uploaded_file, os.path.join(output_dir, "source"))
+    if srt_file and srt_file.filename:
+        srt_path = _save_uploaded_file(srt_file, os.path.join(output_dir, "source"))
     job = SubtitleJob(
         job_id=job_id,
         output_dir=output_dir,
@@ -515,7 +621,7 @@ def start_job(
 
     thread = threading.Thread(
         target=_run_job,
-        args=(job, youtube_url, uploaded_path),
+        args=(job, youtube_url, uploaded_path, srt_path),
         daemon=True,
     )
     thread.start()
@@ -523,7 +629,7 @@ def start_job(
     return job.to_dict()
 
 
-def _run_job(job: SubtitleJob, youtube_url: Optional[str], uploaded_path: Optional[str]) -> None:
+def _run_job(job: SubtitleJob, youtube_url: Optional[str], uploaded_path: Optional[str], srt_path: Optional[str] = None) -> None:
     try:
         _update_job(job, status="running", phase="source", message="영상 소스를 준비하는 중입니다.")
         job.source_path = _prepare_source_path(job, youtube_url, uploaded_path)
@@ -531,7 +637,14 @@ def _run_job(job: SubtitleJob, youtube_url: Optional[str], uploaded_path: Option
 
         _update_job(job, phase="split", message="영상 분할을 시작합니다.")
         ffmpeg_module.register_ffmpeg_path()
-        segments_metadata = _create_segments(job, job.chunk_minutes)
+
+        # SRT 파일이 제공된 경우 VAD/Whisper를 건너뛰고 SRT 기반으로 세그먼트 생성
+        if srt_path:
+            job.append_log(f"업로드된 SRT 파일을 사용하여 세그먼트를 생성합니다: {srt_path}")
+            segments_metadata = _create_segments_from_srt(job, srt_path)
+        else:
+            segments_metadata = _create_segments(job, job.chunk_minutes)
+
         job.total_segments = len(segments_metadata)
 
         job.segments = [
@@ -568,15 +681,20 @@ def _run_job(job: SubtitleJob, youtube_url: Optional[str], uploaded_path: Option
             job.append_log(f"{segment.index}번 세그먼트 전사 중...")
             job.updated_at = _now()
 
-            try:
-                segment.whisper_segments = _generate_whisper_segments(segment)
-                if segment.whisper_segments:
-                    job.append_log(
-                        f"Whisper 참고 세그먼트 {len(segment.whisper_segments)}개를 확보했습니다."
-                    )
-            except Exception as whisper_exc:
+            # SRT 파일이 제공된 경우 Whisper 단계를 건너뜀
+            if not srt_path:
+                try:
+                    segment.whisper_segments = _generate_whisper_segments(segment)
+                    if segment.whisper_segments:
+                        job.append_log(
+                            f"Whisper 참고 세그먼트 {len(segment.whisper_segments)}개를 확보했습니다."
+                        )
+                except Exception as whisper_exc:
+                    segment.whisper_segments = []
+                    job.append_log(f"Whisper 기반 세그먼트 생성 실패: {whisper_exc}")
+            else:
                 segment.whisper_segments = []
-                job.append_log(f"Whisper 기반 세그먼트 생성 실패: {whisper_exc}")
+                job.append_log("SRT 파일이 제공되어 Whisper 단계를 건너뜁니다.")
 
             normalized, description = _transcribe_segment(
                 client, segment, job.mode, job.target_language

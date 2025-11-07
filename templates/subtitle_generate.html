@@ -61,16 +61,26 @@
                                         <span class="h-px flex-1 bg-slate-200"></span>
                                     </div>
                                     <div class="flex flex-col">
-                                        <h3 class="text-sm font-medium text-slate-700">영상 파일 업로드</h3>
-                                        <div id="video-drop-zone" class="flex flex-col items-center justify-center gap-4 rounded-lg border-2 border-dashed border-slate-300 px-6 py-6 text-center bg-slate-50 hover:border-slate-400 transition-colors">
-                                            <p id="video-upload-text" class="text-slate-700 text-base font-medium leading-tight">여기에 영상 파일을 끌어다 놓으세요</p>
+                                        <h3 class="text-sm font-medium text-slate-700">파일 업로드</h3>
+                                        <p class="text-xs text-slate-500 mt-1 mb-2">영상 파일과 SRT 자막 파일을 함께 업로드할 수 있습니다. SRT 파일을 함께 업로드하면 VAD/Whisper 처리를 건너뛰고 자막의 타임스탬프를 기준으로 세그먼트를 나눕니다.</p>
+                                        <div id="file-drop-zone" class="flex flex-col items-center justify-center gap-4 rounded-lg border-2 border-dashed border-slate-300 px-6 py-8 text-center bg-slate-50 hover:border-slate-400 transition-colors">
+                                            <div class="flex items-center gap-2">
+                                                <span class="material-icons text-4xl text-slate-400">cloud_upload</span>
+                                            </div>
+                                            <div>
+                                                <p class="text-slate-700 text-base font-medium leading-tight">여기에 파일을 끌어다 놓으세요</p>
+                                                <p class="text-slate-500 text-sm font-normal leading-normal mt-1">영상 파일 (필수) + SRT 파일 (선택)</p>
+                                            </div>
                                             <p class="text-slate-500 text-sm font-normal leading-normal">또는</p>
                                             <input type="file" name="video_file" id="video-file" accept="video/*" class="hidden" />
-                                            <button type="button" id="video-select-btn" class="flex items-center gap-2 min-w-[84px] max-w-[480px] cursor-pointer justify-center overflow-hidden rounded-md h-10 px-4 bg-slate-200 text-slate-700 text-sm font-semibold leading-normal tracking-[0.015em] hover:bg-slate-300 transition-colors">
+                                            <input type="file" name="srt_file" id="srt-file" accept=".srt" class="hidden" />
+                                            <input type="file" id="file-input" accept="video/*,.srt" multiple class="hidden" />
+                                            <button type="button" id="file-select-btn" class="flex items-center gap-2 min-w-[84px] max-w-[480px] cursor-pointer justify-center overflow-hidden rounded-md h-10 px-4 bg-slate-200 text-slate-700 text-sm font-semibold leading-normal tracking-[0.015em] hover:bg-slate-300 transition-colors">
                                                 <span class="material-icons text-lg">folder_open</span>
-                                                <span class="truncate">파일 찾기</span>
+                                                <span class="truncate">파일 선택</span>
                                             </button>
                                         </div>
+                                        <div id="file-list" class="mt-3 space-y-2 hidden"></div>
                                     </div>
                                 </div>
                             </section>

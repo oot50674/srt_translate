@@ -7,10 +7,12 @@
     const submitSpinner = document.getElementById('subtitle-submit-spinner');
     const submitText = document.getElementById('subtitle-submit-text');
     const formHint = document.getElementById('form-hint');
-    const dropZone = document.getElementById('video-drop-zone');
-    const fileInput = document.getElementById('video-file');
-    const uploadText = document.getElementById('video-upload-text');
-    const selectBtn = document.getElementById('video-select-btn');
+    const dropZone = document.getElementById('file-drop-zone');
+    const videoFileInput = document.getElementById('video-file');
+    const srtFileInput = document.getElementById('srt-file');
+    const fileInput = document.getElementById('file-input');
+    const selectBtn = document.getElementById('file-select-btn');
+    const fileList = document.getElementById('file-list');
     const missingApiKey = String(document.body.dataset.missingApiKey || '').toLowerCase() === 'true';
 
     function showAlert(message, type = 'error') {
@@ -51,12 +53,102 @@
         translationLanguage.classList.toggle('hidden', !needsTranslation);
     }
 
+    function isVideoFile(filename) {
+        const videoExts = ['.mp4', '.avi', '.mov', '.mkv', '.webm', '.flv', '.wmv', '.m4v'];
+        return videoExts.some(ext => filename.toLowerCase().endsWith(ext));
+    }
+
+    function isSrtFile(filename) {
+        return filename.toLowerCase().endsWith('.srt');
+    }
+
+    function processFiles(files) {
+        if (!files || files.length === 0) return;
+
+        let videoFile = null;
+        let srtFile = null;
+
+        // 파일을 타입별로 분류
+        Array.from(files).forEach(file => {
+            if (isVideoFile(file.name)) {
+                videoFile = file;
+            } else if (isSrtFile(file.name)) {
+                srtFile = file;
+            }
+        });
+
+        // DataTransfer 객체를 사용하여 각 input에 파일 할당
+        if (videoFile) {
+            const dt = new DataTransfer();
+            dt.items.add(videoFile);
+            videoFileInput.files = dt.files;
+        }
+
+        if (srtFile) {
+            const dt = new DataTransfer();
+            dt.items.add(srtFile);
+            srtFileInput.files = dt.files;
+        }
+
+        // 파일 목록 UI 업데이트
+        updateFileList(videoFile, srtFile);
+    }
+
+    function updateFileList(videoFile, srtFile) {
+        if (!fileList) return;
+
+        if (!videoFile && !srtFile) {
+            fileList.classList.add('hidden');
+            fileList.innerHTML = '';
+            return;
+        }
+
+        fileList.classList.remove('hidden');
+        fileList.innerHTML = '';
+
+        if (videoFile) {
+            const videoItem = document.createElement('div');
+            videoItem.className = 'flex items-center gap-2 px-3 py-2 bg-blue-50 border border-blue-200 rounded-md';
+            videoItem.innerHTML = `
+                <span class="material-icons text-blue-600">videocam</span>
+                <span class="flex-1 text-sm text-slate-700 truncate">${videoFile.name}</span>
+                <button type="button" class="remove-video-btn text-slate-400 hover:text-slate-600">
+                    <span class="material-icons text-lg">close</span>
+                </button>
+            `;
+            fileList.appendChild(videoItem);
+
+            videoItem.querySelector('.remove-video-btn').addEventListener('click', () => {
+                videoFileInput.value = '';
+                updateFileList(null, srtFileInput.files?.[0] || null);
+            });
+        }
+
+        if (srtFile) {
+            const srtItem = document.createElement('div');
+            srtItem.className = 'flex items-center gap-2 px-3 py-2 bg-emerald-50 border border-emerald-200 rounded-md';
+            srtItem.innerHTML = `
+                <span class="material-icons text-emerald-600">subtitles</span>
+                <span class="flex-1 text-sm text-slate-700 truncate">${srtFile.name}</span>
+                <button type="button" class="remove-srt-btn text-slate-400 hover:text-slate-600">
+                    <span class="material-icons text-lg">close</span>
+                </button>
+            `;
+            fileList.appendChild(srtItem);
+
+            srtItem.querySelector('.remove-srt-btn').addEventListener('click', () => {
+                srtFileInput.value = '';
+                updateFileList(videoFileInput.files?.[0] || null, null);
+            });
+        }
+    }
+
     function validateForm() {
         const youtubeUrl = form.elements.namedItem('youtube_url')?.value.trim();
-        const fileSelected = fileInput?.files && fileInput.files.length > 0;
+        const videoFileSelected = videoFileInput?.files && videoFileInput.files.length > 0;
         const mode = Array.from(modeRadios).find(radio => radio.checked)?.value || 'transcribe';
         const targetLanguage = form.elements.namedItem('target_language')?.value.trim();
-        if (!youtubeUrl && !fileSelected) {
+        if (!youtubeUrl && !videoFileSelected) {
             throw new Error('YouTube 링크 또는 영상 파일을 입력해 주세요.');
         }
         if (mode === 'translate' && !targetLanguage) {
@@ -102,36 +194,38 @@
     }
 
     function bindDropZone() {
-        if (!dropZone || !fileInput) return;
+        if (!dropZone) return;
+
         ['dragenter', 'dragover'].forEach(evt => {
             dropZone.addEventListener(evt, e => {
                 e.preventDefault();
-                dropZone.classList.add('border-slate-400');
+                dropZone.classList.add('border-blue-400', 'bg-blue-50');
             });
         });
+
         ['dragleave', 'drop'].forEach(evt => {
             dropZone.addEventListener(evt, e => {
                 e.preventDefault();
-                dropZone.classList.remove('border-slate-400');
+                dropZone.classList.remove('border-blue-400', 'bg-blue-50');
             });
         });
+
         dropZone.addEventListener('drop', e => {
             e.preventDefault();
-            if (e.dataTransfer?.files?.[0]) {
-                fileInput.files = e.dataTransfer.files;
-                if (uploadText) uploadText.textContent = e.dataTransfer.files[0].name;
+            if (e.dataTransfer?.files) {
+                processFiles(e.dataTransfer.files);
             }
         });
     }
 
     function bindFileSelect() {
-        if (!selectBtn || !fileInput || !uploadText) return;
+        if (!selectBtn || !fileInput) return;
+
         selectBtn.addEventListener('click', () => fileInput.click());
+
         fileInput.addEventListener('change', () => {
-            if (fileInput.files && fileInput.files[0]) {
-                uploadText.textContent = fileInput.files[0].name;
-            } else {
-                uploadText.textContent = '여기에 영상 파일을 끌어다 놓으세요';
+            if (fileInput.files) {
+                processFiles(fileInput.files);
             }
         });
     }

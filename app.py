@@ -164,10 +164,12 @@ def api_create_subtitle_generation_job():
     except (TypeError, ValueError):
         chunk_minutes = 10.0
     video_file = request.files.get('video_file')
+    srt_file = request.files.get('srt_file')
     try:
         job = start_subtitle_job(
             youtube_url=youtube_url or None,
             uploaded_file=video_file if video_file and video_file.filename else None,
+            srt_file=srt_file if srt_file and srt_file.filename else None,
             chunk_minutes=chunk_minutes,
             mode=transcription_mode,
             target_language=target_language or None,
