@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>자막 생성</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Work+Sans:wght@400;500;600;700&family=Noto+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet" />
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+
+<body class="bg-slate-100" style='font-family: "Work Sans", "Noto Sans", sans-serif;'>
+    <div class="relative flex min-h-screen size-full flex-col">
+        <div class="layout-container flex h-full grow flex-col">
+            <header class="flex items-center justify-between whitespace-nowrap border-b border-solid border-b-slate-200 px-10 py-4 bg-white shadow-sm">
+                <div class="flex items-center gap-6">
+                    <div class="flex items-center gap-3 text-slate-900">
+                        <div class="size-7 text-[#0c77f2]">
+                            <svg fill="none" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M4 42.4379C4 42.4379 14.0962 36.0744 24 41.1692C35.0664 46.8624 44 42.2078 44 42.2078L44 7.01134C44 7.01134 35.068 11.6577 24.0031 5.96913C14.0971 0.876274 4 7.27094 4 7.27094L4 42.4379Z" fill="currentColor"></path>
+                            </svg>
+                        </div>
+                        <h2 class="text-slate-900 text-xl font-semibold leading-tight tracking-[-0.015em]">자막 번역기</h2>
+                    </div>
+                    <nav class="flex items-center gap-6">
+                        <a class="text-slate-700 hover:text-[#0c77f2] text-sm font-medium leading-normal transition-colors" href="/">자막 번역</a>
+                        <a class="text-[#0c77f2] text-sm font-semibold leading-normal" href="/subtitle_generate">자막 생성</a>
+                    </nav>
+                </div>
+                <div class="flex gap-3">
+                    <!-- 필요 시 상단 우측 액션 버튼 영역 -->
+                </div>
+            </header>
+            <main class="px-4 md:px-10 lg:px-20 py-10">
+                <div class="max-w-3xl mx-auto">
+                    <div class="flex flex-col w-full py-8 bg-white shadow-xl rounded-xl px-6 md:px-10">
+                        <div class="mb-8">
+                            <h1 class="text-2xl font-semibold text-slate-900">자막 생성</h1>
+                            <p class="mt-2 text-sm text-slate-600">YouTube 링크 또는 영상 파일을 업로드하여 자막을 생성하고, 원본 전사 또는 번역 옵션을 선택하세요.</p>
+                        </div>
+                        <form class="space-y-8">
+                            <section class="space-y-4">
+                                <h2 class="text-lg font-semibold text-slate-900">영상 소스</h2>
+                                <div class="grid gap-4">
+                                    <label class="flex flex-col gap-2">
+                                        <span class="text-sm font-medium text-slate-700">YouTube 링크</span>
+                                        <input type="url" name="youtube_url" placeholder="https://www.youtube.com/watch?v=..." class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20">
+                                    </label>
+                                    <div class="flex items-center justify-center gap-2 text-sm text-slate-500 w-full">
+                                        <span class="h-px flex-1 bg-slate-200"></span>
+                                        <span>또는</span>
+                                        <span class="h-px flex-1 bg-slate-200"></span>
+                                    </div>
+                                    <div class="flex flex-col">
+                                        <h3 class="text-sm font-medium text-slate-700">영상 파일 업로드</h3>
+                                        <div id="video-drop-zone" class="flex flex-col items-center justify-center gap-4 rounded-lg border-2 border-dashed border-slate-300 px-6 py-6 text-center bg-slate-50 hover:border-slate-400 transition-colors">
+                                            <p id="video-upload-text" class="text-slate-700 text-base font-medium leading-tight">여기에 영상 파일을 끌어다 놓으세요</p>
+                                            <p class="text-slate-500 text-sm font-normal leading-normal">또는</p>
+                                            <input type="file" name="video_file" id="video-file" accept="video/*" class="hidden" />
+                                            <button type="button" id="video-select-btn" class="flex items-center gap-2 min-w-[84px] max-w-[480px] cursor-pointer justify-center overflow-hidden rounded-md h-10 px-4 bg-slate-200 text-slate-700 text-sm font-semibold leading-normal tracking-[0.015em] hover:bg-slate-300 transition-colors">
+                                                <span class="material-icons text-lg">folder_open</span>
+                                                <span class="truncate">파일 찾기</span>
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </section>
+
+                            <section class="space-y-4">
+                                <h2 class="text-lg font-semibold text-slate-900">전사 및 번역 설정</h2>
+                                <div class="space-y-3">
+                                    <label class="flex items-center gap-3">
+                                        <input type="radio" name="transcription_mode" value="transcribe" class="h-4 w-4 text-[#0c77f2] focus:ring-[#0c77f2]" checked>
+                                        <span class="text-sm text-slate-700">원본 언어로만 전사</span>
+                                    </label>
+                                    <label class="flex items-center gap-3">
+                                        <input type="radio" name="transcription_mode" value="translate" class="h-4 w-4 text-[#0c77f2] focus:ring-[#0c77f2]">
+                                        <span class="text-sm text-slate-700">특정 언어로 번역</span>
+                                    </label>
+                                    <div id="translation-language" class="hidden md:flex md:flex-col">
+                                        <label class="flex flex-col gap-2">
+                                            <span class="text-sm font-medium text-slate-700">번역 대상 언어</span>
+                                            <input type="text" name="target_language" placeholder="예: 영어, 일본어" class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20">
+                                        </label>
+                                    </div>
+                                </div>
+                            </section>
+
+                            <section class="space-y-4">
+                                <h2 class="text-lg font-semibold text-slate-900">청크 설정</h2>
+                                <div class="grid gap-2">
+                                    <label class="flex flex-col gap-2">
+                                        <span class="text-sm font-medium text-slate-700">청크 길이 (분)</span>
+                                        <input type="number" name="chunk_minutes" value="10" min="1" step="1" class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20">
+                                        <span class="text-xs text-slate-400">기본값은 10분이며, 분 단위로 설정할 수 있습니다.</span>
+                                    </label>
+                                </div>
+                            </section>
+
+                            <div class="flex justify-end">
+                                <button type="submit" class="flex min-w-[120px] items-center justify-center rounded-md bg-[#0c77f2] px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-600">
+                                    자막 생성 요청
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <script>
+        // 전사 모드에 따라 번역 언어 입력 필드를 토글하는 스크립트
+        const transcriptionRadios = document.querySelectorAll('input[name="transcription_mode"]');
+        const translationLanguage = document.getElementById('translation-language');
+
+        transcriptionRadios.forEach((radio) => {
+            radio.addEventListener('change', () => {
+                if (radio.value === 'translate' && radio.checked) {
+                    translationLanguage.classList.remove('hidden');
+                } else if (radio.value === 'transcribe' && radio.checked) {
+                    translationLanguage.classList.add('hidden');
+                }
+            });
+        });
+
+        // 비디오 업로드 드롭존 및 파일 선택 처리
+        const videoDropZone = document.getElementById('video-drop-zone');
+        const videoInput = document.getElementById('video-file');
+        const videoUploadText = document.getElementById('video-upload-text');
+        const videoSelectBtn = document.getElementById('video-select-btn');
+
+        if (videoSelectBtn && videoInput) {
+            videoSelectBtn.addEventListener('click', () => videoInput.click());
+            videoInput.addEventListener('change', () => {
+                if (videoInput.files && videoInput.files[0]) {
+                    videoUploadText.textContent = videoInput.files[0].name;
+                } else {
+                    videoUploadText.textContent = '여기에 영상 파일을 끌어다 놓으세요';
+                }
+            });
+        }
+
+        if (videoDropZone) {
+            ['dragenter', 'dragover'].forEach(evt => {
+                videoDropZone.addEventListener(evt, (e) => {
+                    e.preventDefault();
+                    videoDropZone.classList.add('border-slate-400');
+                });
+            });
+            ['dragleave', 'drop'].forEach(evt => {
+                videoDropZone.addEventListener(evt, (e) => {
+                    e.preventDefault();
+                    videoDropZone.classList.remove('border-slate-400');
+                });
+            });
+            videoDropZone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]) {
+                    // 단일 파일만 처리
+                    videoInput.files = e.dataTransfer.files;
+                    videoUploadText.textContent = e.dataTransfer.files[0].name;
+                }
+            });
+        }
+    </script>
+</body>
+
+</html>
+

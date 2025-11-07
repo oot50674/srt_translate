@@ -526,6 +526,13 @@ def progress():
     return render_template('progress.html')
 
 
+@app.route('/subtitle_generate')
+def subtitle_generate():
+    """자막 생성 페이지 템플릿을 렌더링합니다."""
+    missing_api_key = not bool(os.environ.get('GOOGLE_API_KEY', '').strip())
+    return render_template('subtitle_generate.html', missing_api_key=missing_api_key)
+
+
 @app.route('/api/settings/api-key', methods=['POST'])
 def api_save_google_api_key():
     data = request.get_json(silent=True) or {}
