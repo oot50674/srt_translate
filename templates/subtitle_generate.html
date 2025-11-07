@@ -12,7 +12,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
 
-<body class="bg-slate-100" style='font-family: "Work Sans", "Noto Sans", sans-serif;'>
+<body class="bg-slate-100" style='font-family: "Work Sans", "Noto Sans", sans-serif;' data-missing-api-key="{{ 'true' if missing_api_key else 'false' }}">
     <div class="relative flex min-h-screen size-full flex-col">
         <div class="layout-container flex h-full grow flex-col">
             <header class="flex items-center justify-between whitespace-nowrap border-b border-solid border-b-slate-200 px-10 py-4 bg-white shadow-sm">
@@ -40,8 +40,14 @@
                         <div class="mb-8">
                             <h1 class="text-2xl font-semibold text-slate-900">자막 생성</h1>
                             <p class="mt-2 text-sm text-slate-600">YouTube 링크 또는 영상 파일을 업로드하여 자막을 생성하고, 원본 전사 또는 번역 옵션을 선택하세요.</p>
+                            {% if missing_api_key %}
+                            <div class="mt-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                                Google API Key가 설정되지 않았습니다. 추가 설정에서 키를 저장한 뒤 다시 시도하세요.
+                            </div>
+                            {% endif %}
                         </div>
-                        <form class="space-y-8">
+                        <div id="subtitle-generate-alert" class="hidden rounded-lg border px-4 py-3 text-sm mb-6"></div>
+                        <form id="subtitle-generate-form" class="space-y-8" method="post" enctype="multipart/form-data">
                             <section class="space-y-4">
                                 <h2 class="text-lg font-semibold text-slate-900">영상 소스</h2>
                                 <div class="grid gap-4">
@@ -100,9 +106,11 @@
                                 </div>
                             </section>
 
-                            <div class="flex justify-end">
-                                <button type="submit" class="flex min-w-[120px] items-center justify-center rounded-md bg-[#0c77f2] px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-600">
-                                    자막 생성 요청
+                            <div class="flex items-center justify-between flex-wrap gap-3">
+                                <p class="text-xs text-slate-500" id="form-hint">영상 길이와 네트워크에 따라 다소 시간이 걸릴 수 있습니다.</p>
+                                <button type="submit" id="subtitle-submit-btn" class="flex min-w-[140px] items-center justify-center gap-2 rounded-md bg-[#0c77f2] px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-600 disabled:opacity-60 disabled:cursor-not-allowed">
+                                    <span class="material-icons text-base hidden" id="subtitle-submit-spinner">autorenew</span>
+                                    <span id="subtitle-submit-text">자막 생성 요청</span>
                                 </button>
                             </div>
                         </form>
@@ -112,62 +120,7 @@
         </div>
     </div>
 
-    <script>
-        // 전사 모드에 따라 번역 언어 입력 필드를 토글하는 스크립트
-        const transcriptionRadios = document.querySelectorAll('input[name="transcription_mode"]');
-        const translationLanguage = document.getElementById('translation-language');
-
-        transcriptionRadios.forEach((radio) => {
-            radio.addEventListener('change', () => {
-                if (radio.value === 'translate' && radio.checked) {
-                    translationLanguage.classList.remove('hidden');
-                } else if (radio.value === 'transcribe' && radio.checked) {
-                    translationLanguage.classList.add('hidden');
-                }
-            });
-        });
-
-        // 비디오 업로드 드롭존 및 파일 선택 처리
-        const videoDropZone = document.getElementById('video-drop-zone');
-        const videoInput = document.getElementById('video-file');
-        const videoUploadText = document.getElementById('video-upload-text');
-        const videoSelectBtn = document.getElementById('video-select-btn');
-
-        if (videoSelectBtn && videoInput) {
-            videoSelectBtn.addEventListener('click', () => videoInput.click());
-            videoInput.addEventListener('change', () => {
-                if (videoInput.files && videoInput.files[0]) {
-                    videoUploadText.textContent = videoInput.files[0].name;
-                } else {
-                    videoUploadText.textContent = '여기에 영상 파일을 끌어다 놓으세요';
-                }
-            });
-        }
-
-        if (videoDropZone) {
-            ['dragenter', 'dragover'].forEach(evt => {
-                videoDropZone.addEventListener(evt, (e) => {
-                    e.preventDefault();
-                    videoDropZone.classList.add('border-slate-400');
-                });
-            });
-            ['dragleave', 'drop'].forEach(evt => {
-                videoDropZone.addEventListener(evt, (e) => {
-                    e.preventDefault();
-                    videoDropZone.classList.remove('border-slate-400');
-                });
-            });
-            videoDropZone.addEventListener('drop', (e) => {
-                e.preventDefault();
-                if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]) {
-                    // 단일 파일만 처리
-                    videoInput.files = e.dataTransfer.files;
-                    videoUploadText.textContent = e.dataTransfer.files[0].name;
-                }
-            });
-        }
-    </script>
+    <script src="{{ url_for('static', filename='js/subtitle_generate.js') }}" defer></script>
 </body>
 
 </html>
-
