@@ -182,10 +182,13 @@
         const targetLanguage = form.elements.namedItem('target_language')?.value.trim();
         const keepOriginal = keepOriginalEntriesCheckbox?.checked || false;
 
-        // 원본 엔트리 유지 모드: SRT 파일만 필요
+        // 원본 엔트리 유지 모드: SRT 파일 + 영상 필요
         if (keepOriginal) {
             if (!srtFileSelected) {
                 throw new Error('원본 엔트리 유지 모드에서는 SRT 파일이 필요합니다.');
+            }
+            if (!youtubeUrl && !videoFileSelected) {
+                throw new Error('원본 엔트리 유지 모드에서는 영상 파일도 필요합니다.');
             }
         } else {
             // 일반 모드: 영상 필요

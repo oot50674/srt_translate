@@ -107,7 +107,7 @@
                                             <input type="checkbox" name="keep_original_entries" id="keep-original-entries" class="mt-0.5 h-4 w-4 text-[#0c77f2] focus:ring-[#0c77f2] rounded">
                                             <div class="flex flex-col gap-1">
                                                 <span class="text-sm text-slate-700">원본 자막 엔트리 유지</span>
-                                                <span class="text-xs text-slate-500">SRT 파일의 타임스탬프와 구조를 그대로 유지하고 텍스트만 번역합니다. 영상 분석 없이 더 빠르게 처리됩니다.</span>
+                                                <span class="text-xs text-slate-500">SRT 파일의 타임스탬프를 그대로 유지하고, 각 구간의 영상을 LLM이 보면서 번역합니다. VAD/Whisper 단계를 건너뜁니다.</span>
                                             </div>
                                         </label>
                                     </div>

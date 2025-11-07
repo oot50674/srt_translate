@@ -602,10 +602,12 @@ def start_job(
     if not os.environ.get("GOOGLE_API_KEY"):
         raise ValueError("Google API Key가 설정되지 않았습니다.")
 
-    # 원본 엔트리 유지 모드: SRT 파일만 필요
+    # 원본 엔트리 유지 모드: SRT 파일 + 영상 필요
     if keep_original_entries:
         if not (srt_file and srt_file.filename):
             raise ValueError("원본 엔트리 유지 모드에서는 SRT 파일이 필요합니다.")
+        if not (youtube_url or (uploaded_file and uploaded_file.filename)):
+            raise ValueError("원본 엔트리 유지 모드에서는 영상 파일도 필요합니다.")
         if mode != "translate":
             raise ValueError("원본 엔트리 유지 모드는 번역 모드에서만 사용할 수 있습니다.")
     else:
@@ -649,9 +651,9 @@ def start_job(
     return job.to_dict()
 
 
-def _translate_srt_entries_directly(job: SubtitleJob, srt_path: str) -> None:
-    """원본 SRT 엔트리의 타임스탬프를 유지하면서 텍스트만 번역합니다."""
-    job.append_log("원본 자막 엔트리를 유지하면서 번역을 시작합니다.")
+def _translate_srt_entries_with_video(job: SubtitleJob, srt_path: str) -> None:
+    """원본 SRT 엔트리의 타임스탬프를 유지하면서 영상을 보고 번역합니다."""
+    job.append_log("원본 자막 엔트리를 유지하면서 영상 분석 기반 번역을 시작합니다.")
 
     # SRT 파일 읽기
     subtitles = srt_module.read_srt(srt_path)
@@ -663,34 +665,61 @@ def _translate_srt_entries_directly(job: SubtitleJob, srt_path: str) -> None:
 
     # Gemini 클라이언트 초기화
     client = GeminiClient(model=DEFAULT_MODEL, thinking_budget=-1)
+    client.start_chat()
 
-    # 번역 프롬프트 구성
-    instruction_lines = [
-        f"Translate the following subtitle text into {job.target_language}.",
-        "Maintain the original meaning and tone.",
-        "Return ONLY the translated text, without any additional formatting or explanation.",
-    ]
-    if job.custom_prompt:
-        instruction_lines.append(f"\nAdditional instructions: {job.custom_prompt}")
-
-    base_instruction = "\n".join(instruction_lines)
-
-    # 각 엔트리 번역
+    # 각 엔트리별로 영상 세그먼트 생성 및 번역
     for idx, subtitle in enumerate(subtitles):
         job.processed_segments = idx
         job.updated_at = _now()
-        job.append_log(f"엔트리 {idx + 1}/{job.total_segments} 번역 중: '{subtitle['text'][:50]}...'")
+        job.append_log(f"엔트리 {idx + 1}/{job.total_segments} 처리 중: '{subtitle['text'][:50]}...'")
 
         try:
-            # 텍스트 번역 요청
-            prompt = f"{base_instruction}\n\nText to translate:\n{subtitle['text']}"
-            response = client.send_message(message=prompt)
-
-            translated_text = response.strip()
-
             # 타임스탬프를 초 단위로 변환
             start_sec = _srt_timestamp_to_seconds(subtitle['start'])
             end_sec = _srt_timestamp_to_seconds(subtitle['end'])
+            duration = end_sec - start_sec
+
+            # 해당 구간의 영상 세그먼트 추출
+            segment_filename = f"entry_{idx:04d}.mp4"
+            segment_path = os.path.join(job.chunks_dir, segment_filename)
+
+            # FFmpeg로 영상 분할
+            cmd = [
+                'ffmpeg',
+                '-i', job.source_path,
+                '-ss', str(start_sec),
+                '-t', str(duration),
+                '-c', 'copy',
+                '-y',
+                segment_path
+            ]
+            import subprocess
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                logger.error(f"FFmpeg 분할 실패: {result.stderr}")
+                raise RuntimeError(f"엔트리 {idx} 영상 분할 실패")
+
+            # 번역 프롬프트 구성
+            instruction_lines = [
+                "You will receive a short video clip with the original subtitle text.",
+                f"Watch the video and translate the subtitle into {job.target_language}.",
+                "Maintain the original meaning and tone while watching the visual context.",
+                "Return ONLY the translated text, without any additional formatting or explanation.",
+            ]
+            if job.custom_prompt:
+                instruction_lines.append(f"\nAdditional instructions: {job.custom_prompt}")
+
+            instruction_lines.append(f"\nOriginal subtitle text:\n{subtitle['text']}")
+            prompt = "\n".join(instruction_lines)
+
+            # Gemini에 영상과 함께 번역 요청
+            response = client.send_message(
+                message=prompt,
+                media_paths=[segment_path],
+                max_wait_seconds=300
+            )
+
+            translated_text = response.strip()
 
             # 번역된 엔트리 추가
             job.transcript_entries.append({
@@ -701,13 +730,19 @@ def _translate_srt_entries_directly(job: SubtitleJob, srt_path: str) -> None:
 
             job.append_log(f"번역 완료: '{translated_text[:50]}...'")
 
-            # RPM 보호 (마지막 엔트리가 아닌 경우만)
+            # 영상 세그먼트 파일 삭제 (용량 절약)
+            try:
+                os.remove(segment_path)
+            except:
+                pass
+
+            # RPM 보호
             if idx < len(subtitles) - 1:
-                time.sleep(1)  # 1초 대기
+                time.sleep(2)  # 2초 대기
 
         except Exception as exc:
-            logger.exception(f"엔트리 {idx + 1} 번역 실패")
-            job.append_log(f"엔트리 {idx + 1} 번역 실패: {exc}. 원본 텍스트를 사용합니다.", level="warning")
+            logger.exception(f"엔트리 {idx + 1} 처리 실패")
+            job.append_log(f"엔트리 {idx + 1} 처리 실패: {exc}. 원본 텍스트를 사용합니다.", level="warning")
             # 실패 시 원본 텍스트 사용
             start_sec = _srt_timestamp_to_seconds(subtitle['start'])
             end_sec = _srt_timestamp_to_seconds(subtitle['end'])
@@ -722,10 +757,15 @@ def _translate_srt_entries_directly(job: SubtitleJob, srt_path: str) -> None:
 
 def _run_job(job: SubtitleJob, youtube_url: Optional[str], uploaded_path: Optional[str], srt_path: Optional[str] = None) -> None:
     try:
-        # 원본 엔트리 유지 모드: 영상 없이 SRT만 번역
+        # 원본 엔트리 유지 모드: SRT 타임스탬프로 영상을 나눠서 번역
         if job.keep_original_entries and srt_path:
-            _update_job(job, status="running", phase="translate", message="원본 자막 엔트리를 번역하는 중입니다.")
-            _translate_srt_entries_directly(job, srt_path)
+            _update_job(job, status="running", phase="source", message="영상 소스를 준비하는 중입니다.")
+            job.source_path = _prepare_source_path(job, youtube_url, uploaded_path)
+            job.append_log(f"소스 파일: {job.source_path}")
+
+            _update_job(job, phase="translate", message="원본 자막 엔트리를 유지하면서 영상을 분석하여 번역합니다.")
+            ffmpeg_module.register_ffmpeg_path()
+            _translate_srt_entries_with_video(job, srt_path)
 
             # SRT 파일 저장
             srt_output_path = os.path.join(job.output_dir, f"{job.job_id}.srt")
