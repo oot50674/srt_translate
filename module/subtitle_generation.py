@@ -135,25 +135,58 @@ def _send_gemini_with_retry(
     max_attempts: int = 3,
 ) -> Any:
     last_error: Optional[Exception] = None
+    non_resource_retry_done = False
     for attempt in range(1, max_attempts + 1):
         try:
             return client.send_message(**send_kwargs)
         except genai_errors.ClientError as exc:
             last_error = exc
             error_text = str(exc)
-            if "RESOURCE_EXHAUSTED" not in error_text.upper():
-                raise
-            retry_delay = _get_retry_delay_seconds_from_error(exc)
-            wait_seconds = max(5.0, (retry_delay or 0.0) + 5.0)
-            warning_text = (
-                f"{context} 중 Gemini 쿼터 제한에 도달했습니다. "
-                f"{wait_seconds:.1f}초 후 재시도합니다. (시도 {attempt}/{max_attempts})"
-            )
-            if job:
-                job.append_log(warning_text, level="warning")
-            else:
-                logger.warning(warning_text)
-            time.sleep(wait_seconds)
+            if "RESOURCE_EXHAUSTED" in error_text.upper():
+                retry_delay = _get_retry_delay_seconds_from_error(exc)
+                wait_seconds = max(5.0, (retry_delay or 0.0) + 5.0)
+                warning_text = (
+                    f"{context} 중 Gemini 쿼터 제한에 도달했습니다. "
+                    f"{wait_seconds:.1f}초 후 재시도합니다. (시도 {attempt}/{max_attempts})"
+                )
+                if job:
+                    job.append_log(warning_text, level="warning")
+                else:
+                    logger.warning(warning_text)
+                time.sleep(wait_seconds)
+                continue
+
+            if not non_resource_retry_done:
+                non_resource_retry_done = True
+                retry_delay = _get_retry_delay_seconds_from_error(exc)
+                wait_seconds = max(5.0, (retry_delay or 0.0) + 5.0)
+                warning_text = (
+                    f"{context} 중 오류가 발생했습니다: {error_text}. "
+                    f"{wait_seconds:.1f}초 후 재시도합니다. (추가 재시도 1/1)"
+                )
+                if job:
+                    job.append_log(warning_text, level="warning")
+                else:
+                    logger.warning(warning_text)
+                time.sleep(wait_seconds)
+                continue
+            raise
+        except Exception as exc:
+            last_error = exc
+            if not non_resource_retry_done:
+                non_resource_retry_done = True
+                wait_seconds = 60.0
+                warning_text = (
+                    f"{context} 중 알 수 없는 오류가 발생했습니다: {exc}. "
+                    f"{wait_seconds:.1f}초 후 재시도합니다. (추가 재시도 1/1)"
+                )
+                if job:
+                    job.append_log(warning_text, level="warning")
+                else:
+                    logger.warning(warning_text)
+                time.sleep(wait_seconds)
+                continue
+            raise
     if last_error:
         raise last_error
     raise RuntimeError("Gemini 요청 재시도에 실패했습니다.")
@@ -548,6 +581,7 @@ class SubtitleJob:
     transcript_entries: List[Dict[str, Any]] = field(default_factory=list)
     entry_index_map: Dict[int, Dict[str, Any]] = field(default_factory=dict)
     logs: List[Dict[str, Any]] = field(default_factory=list)
+    failed_segments: List[int] = field(default_factory=list)
 
     def progress(self) -> float:
         if self.total_segments <= 0:
@@ -577,6 +611,7 @@ class SubtitleJob:
             "error": self.error,
             "segments": [segment.to_dict() for segment in self.segments],
             "logs": list(self.logs),
+            "failed_segments": list(self.failed_segments),
         }
 
     def append_log(self, text: str, level: str = "info") -> None:
@@ -745,6 +780,7 @@ def _process_segment_entries(
             f"Translate every entry into {job.target_language} while keeping the speaker's intent and natural tone."
         )
         instruction_lines.append("Return only the translated sentences without source text or language labels.")
+        instruction_lines.append("Use the timestamps below as context, but only update the text for each entry.")
     else:
         instruction_lines.append("Provide a faithful transcription in the original spoken language.")
     instruction_lines.append(
@@ -807,6 +843,104 @@ def _process_segment_entries(
     return update_count, updated_records
 
 
+def _process_segment(
+    job: SubtitleJob,
+    client: GeminiClient,
+    segment: SegmentState,
+    *,
+    task_label: str,
+    last_segment_start_at: Optional[float],
+    allow_processed_increment: bool,
+    is_retry: bool = False,
+) -> float:
+    if last_segment_start_at is not None:
+        elapsed = max(0.0, time.time() - last_segment_start_at)
+        if elapsed < 60.0:
+            wait_seconds = 60.0 - elapsed
+            job.append_log(f"쿼터 보호를 위해 {wait_seconds:.1f}초 대기 후 다음 세그먼트를 처리합니다.")
+            time.sleep(wait_seconds)
+
+    started_at = time.time()
+    segment.status = "processing"
+    if is_retry:
+        segment.message = f"재시도 {task_label} 중..."
+        job.append_log(f"{segment.index}번 세그먼트 재시도 {task_label} 중...")
+    else:
+        segment.message = f"{task_label} 중..."
+        job.append_log(f"{segment.index}번 세그먼트 {task_label} 중...")
+    job.updated_at = _now()
+
+    segment_entries = _entries_for_segment(job, segment)
+    if not segment_entries:
+        segment.status = "completed"
+        segment.message = "처리할 자막 없음"
+        if segment.index in job.failed_segments:
+            job.failed_segments.remove(segment.index)
+        if allow_processed_increment:
+            job.processed_segments += 1
+        job.updated_at = _now()
+        return started_at
+
+    try:
+        updated_count, updated_records = _process_segment_entries(job, client, segment, segment_entries)
+        if updated_count == 0:
+            segment.message = "재시도 응답 없음 (원본 유지)" if is_retry else "응답 없음 (원본 유지)"
+        else:
+            base_message = f"{updated_count}개 엔트리 {task_label} 완료"
+            if is_retry:
+                base_message = f"재시도 성공: {base_message}"
+            segment.message = base_message
+        segment.transcript = updated_records or [
+            {
+                "index": entry["index"],
+                "start": entry["start"],
+                "end": entry["end"],
+                "text": entry.get("text", ""),
+            }
+            for entry in segment_entries
+        ]
+        segment.status = "completed"
+        if segment.index in job.failed_segments:
+            job.failed_segments.remove(segment.index)
+        success_log = f"{segment.index}번 세그먼트 {task_label} 완료: {updated_count}개 업데이트"
+        if is_retry:
+            success_log += " (재시도)"
+        job.append_log(success_log)
+    except Exception as exc:
+        logger.exception("세그먼트 %s 처리 실패", segment.index)
+        failure_log = (
+            f"{segment.index}번 세그먼트 재시도 처리 실패: {exc}. 원본 텍스트를 유지합니다."
+            if is_retry
+            else f"{segment.index}번 세그먼트 처리 실패: {exc}. 원본 텍스트를 유지합니다."
+        )
+        job.append_log(failure_log, level="warning")
+        segment.transcript = [
+            {
+                "index": entry["index"],
+                "start": entry["start"],
+                "end": entry["end"],
+                "text": entry.get("text", ""),
+            }
+            for entry in segment_entries
+        ]
+        segment.status = "error"
+        segment.message = "재시도 실패 (원본 유지)" if is_retry else "실패 (원본 유지)"
+        if segment.index not in job.failed_segments:
+            job.failed_segments.append(segment.index)
+    finally:
+        if allow_processed_increment:
+            job.processed_segments += 1
+        job.updated_at = _now()
+        context_text = _build_transcript_context(job.transcript_entries)
+        if context_text:
+            history_seed = [{'role': 'user', 'parts': [{'text': context_text}]}]
+        else:
+            history_seed = []
+        client.start_chat(history=history_seed, suppress_log=True, reset_usage=False)
+
+    return started_at
+
+
 def _run_job(job: SubtitleJob, youtube_url: Optional[str], uploaded_path: Optional[str], srt_path: Optional[str] = None) -> None:
     try:
         _update_job(job, status="running", phase="source", message="영상 소스를 준비하는 중입니다.")
@@ -859,76 +993,55 @@ def _run_job(job: SubtitleJob, youtube_url: Optional[str], uploaded_path: Option
         task_label = "번역" if job.mode == "translate" else "전사"
 
         for segment in job.segments:
-            if last_segment_start_at is not None:
-                elapsed = max(0.0, time.time() - last_segment_start_at)
-                if elapsed < 60.0:
-                    wait_seconds = 60.0 - elapsed
-                    job.append_log(f"쿼터 보호를 위해 {wait_seconds:.1f}초 대기 후 다음 세그먼트를 처리합니다.")
-                    time.sleep(wait_seconds)
+            last_segment_start_at = _process_segment(
+                job,
+                client,
+                segment,
+                task_label=task_label,
+                last_segment_start_at=last_segment_start_at,
+                allow_processed_increment=True,
+                is_retry=False,
+            )
 
-            last_segment_start_at = time.time()
-            segment.status = "processing"
-            segment.message = f"{task_label} 중..."
-            job.append_log(f"{segment.index}번 세그먼트 {task_label} 중...")
-            job.updated_at = _now()
-
-            segment_entries = _entries_for_segment(job, segment)
-            if not segment_entries:
-                segment.status = "completed"
-                segment.message = "처리할 자막 없음"
-                job.processed_segments += 1
-                job.updated_at = _now()
-                continue
-
-            try:
-                updated_count, updated_records = _process_segment_entries(job, client, segment, segment_entries)
-                if updated_count == 0:
-                    segment.message = "응답 없음 (원본 유지)"
-                else:
-                    segment.message = f"{updated_count}개 엔트리 {task_label} 완료"
-                segment.transcript = updated_records or [
-                    {
-                        "index": entry["index"],
-                        "start": entry["start"],
-                        "end": entry["end"],
-                        "text": entry.get("text", ""),
-                    }
-                    for entry in segment_entries
-                ]
-                job.append_log(f"{segment.index}번 세그먼트 {task_label} 완료: {updated_count}개 업데이트")
-            except Exception as exc:
-                logger.exception("세그먼트 %s 처리 실패", segment.index)
-                job.append_log(
-                    f"{segment.index}번 세그먼트 처리 실패: {exc}. 원본 텍스트를 유지합니다.",
-                    level="warning",
+        initial_failures = sorted(job.failed_segments)
+        if initial_failures:
+            failure_list_text = ", ".join(str(idx) for idx in initial_failures)
+            job.append_log(f"실패한 세그먼트 확인: {failure_list_text}", level="warning")
+            _update_job(job, phase="retry", message="실패한 세그먼트를 재시도하는 중입니다.")
+            for segment_index in initial_failures:
+                segment = next((seg for seg in job.segments if seg.index == segment_index), None)
+                if not segment:
+                    continue
+                last_segment_start_at = _process_segment(
+                    job,
+                    client,
+                    segment,
+                    task_label=task_label,
+                    last_segment_start_at=last_segment_start_at,
+                    allow_processed_increment=False,
+                    is_retry=True,
                 )
-                segment.transcript = [
-                    {
-                        "index": entry["index"],
-                        "start": entry["start"],
-                        "end": entry["end"],
-                        "text": entry.get("text", ""),
-                    }
-                    for entry in segment_entries
-                ]
-                segment.message = "실패 (원본 유지)"
-            finally:
-                segment.status = "completed"
-                job.processed_segments += 1
-                job.updated_at = _now()
-                context_text = _build_transcript_context(job.transcript_entries)
-                if context_text:
-                    history_seed = [{'role': 'user', 'parts': [{'text': context_text}]}]
-                else:
-                    history_seed = []
-                client.start_chat(history=history_seed, suppress_log=True, reset_usage=False)
+            if job.failed_segments:
+                remaining_text = ", ".join(str(idx) for idx in job.failed_segments)
+                job.append_log(f"재시도에도 실패한 세그먼트: {remaining_text}", level="warning")
+                job.message = "일부 세그먼트는 재시도에도 실패했습니다."
+            else:
+                job.append_log("실패한 세그먼트를 재시도하여 성공했습니다.")
+                job.message = "실패 세그먼트 재시도가 완료되었습니다."
+            job.updated_at = _now()
 
         combined = sorted(job.transcript_entries, key=lambda item: item["start"])
         if not combined:
             job.append_log("최종 자막 엔트리가 없습니다.")
         output_path = os.path.join(job.output_dir, f"{job.job_id}.srt")
         job.transcript_path = _write_srt(combined, output_path)
-        _update_job(job, status="completed", phase="finished", message=f"{task_label} 작업이 완료되었습니다.")
+        if job.failed_segments:
+            final_message = (
+                f"{task_label} 작업이 완료되었지만 {len(job.failed_segments)}개 세그먼트는 실패했습니다."
+            )
+        else:
+            final_message = f"{task_label} 작업이 완료되었습니다."
+        _update_job(job, status="completed", phase="finished", message=final_message)
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.exception("Subtitle job %s failed", job.job_id)
         _update_job(job, status="failed", phase="error", message="작업 중 오류가 발생했습니다.", error=str(exc))
