@@ -294,10 +294,11 @@ def _create_segments_from_srt(job: "SubtitleJob", srt_path: str) -> List[Segment
         # FFmpeg 명령어 실행 (PATH에 이미 등록되어 있음)
         cmd = [
             'ffmpeg',
-            '-i', job.source_path,
             '-ss', str(start_time),
+            '-i', job.source_path,
             '-t', str(duration),
             '-c', 'copy',
+            '-avoid_negative_ts', 'make_zero',
             '-y',
             segment_path
         ]
@@ -865,7 +866,6 @@ def _run_job(job: SubtitleJob, youtube_url: Optional[str], uploaded_path: Option
                 if elapsed < 60.0:
                     wait_seconds = 60.0 - elapsed
                     job.append_log(f"쿼터 보호를 위해 {wait_seconds:.1f}초 대기 후 다음 세그먼트를 처리합니다.")
-                    time.sleep(wait_seconds)
                     time.sleep(wait_seconds)
 
             last_segment_start_at = time.time()
