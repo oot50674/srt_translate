@@ -102,6 +102,15 @@
                                             <input type="text" name="target_language" placeholder="예: 영어, 일본어" value="한국어" class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20">
                                         </label>
                                     </div>
+                                    <div id="keep-original-entries-wrapper" class="hidden pl-7 pt-2">
+                                        <label class="flex items-start gap-3">
+                                            <input type="checkbox" name="keep_original_entries" id="keep-original-entries" class="mt-0.5 h-4 w-4 text-[#0c77f2] focus:ring-[#0c77f2] rounded">
+                                            <div class="flex flex-col gap-1">
+                                                <span class="text-sm text-slate-700">원본 자막 엔트리 유지</span>
+                                                <span class="text-xs text-slate-500">SRT 파일의 타임스탬프와 구조를 그대로 유지하고 텍스트만 번역합니다. 영상 분석 없이 더 빠르게 처리됩니다.</span>
+                                            </div>
+                                        </label>
+                                    </div>
                                 </div>
                             </section>
 

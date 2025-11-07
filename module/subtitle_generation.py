@@ -388,6 +388,7 @@ class SubtitleJob:
     mode: str = "transcribe"
     target_language: Optional[str] = None
     custom_prompt: Optional[str] = None
+    keep_original_entries: bool = False
     transcript_path: Optional[str] = None
     error: Optional[str] = None
     created_at: float = field(default_factory=_now)
@@ -590,6 +591,7 @@ def start_job(
     mode: str,
     target_language: Optional[str],
     custom_prompt: Optional[str],
+    keep_original_entries: bool = False,
 ) -> Dict[str, Any]:
     if chunk_minutes <= 0:
         raise ValueError("청크 길이는 0보다 커야 합니다.")
@@ -597,12 +599,21 @@ def start_job(
         raise ValueError("지원하지 않는 전사 모드입니다.")
     if mode == "translate" and not target_language:
         raise ValueError("번역 모드에서는 번역 대상 언어가 필요합니다.")
-    if not (youtube_url or (uploaded_file and uploaded_file.filename)):
-        raise ValueError("영상 파일 또는 YouTube 링크 중 하나가 필요합니다.")
     if not os.environ.get("GOOGLE_API_KEY"):
         raise ValueError("Google API Key가 설정되지 않았습니다.")
-    if srt_file and srt_file.filename and not (uploaded_file and uploaded_file.filename):
-        raise ValueError("SRT 파일을 사용하려면 영상 파일도 함께 업로드해야 합니다.")
+
+    # 원본 엔트리 유지 모드: SRT 파일만 필요
+    if keep_original_entries:
+        if not (srt_file and srt_file.filename):
+            raise ValueError("원본 엔트리 유지 모드에서는 SRT 파일이 필요합니다.")
+        if mode != "translate":
+            raise ValueError("원본 엔트리 유지 모드는 번역 모드에서만 사용할 수 있습니다.")
+    else:
+        # 일반 모드: 영상이 필요
+        if not (youtube_url or (uploaded_file and uploaded_file.filename)):
+            raise ValueError("영상 파일 또는 YouTube 링크 중 하나가 필요합니다.")
+        if srt_file and srt_file.filename and not (uploaded_file and uploaded_file.filename):
+            raise ValueError("SRT 파일을 사용하려면 영상 파일도 함께 업로드해야 합니다.")
 
     job_id = uuid.uuid4().hex
     output_dir = _ensure_dir(os.path.join(SUBTITLE_JOB_ROOT, job_id))
@@ -622,6 +633,7 @@ def start_job(
         target_language=target_language,
         youtube_url=youtube_url,
         custom_prompt=custom_prompt,
+        keep_original_entries=keep_original_entries,
     )
 
     with _LOCK:
@@ -637,8 +649,91 @@ def start_job(
     return job.to_dict()
 
 
+def _translate_srt_entries_directly(job: SubtitleJob, srt_path: str) -> None:
+    """원본 SRT 엔트리의 타임스탬프를 유지하면서 텍스트만 번역합니다."""
+    job.append_log("원본 자막 엔트리를 유지하면서 번역을 시작합니다.")
+
+    # SRT 파일 읽기
+    subtitles = srt_module.read_srt(srt_path)
+    if not subtitles:
+        raise ValueError("SRT 파일에 자막이 없습니다.")
+
+    job.total_segments = len(subtitles)
+    job.append_log(f"총 {job.total_segments}개의 자막 엔트리를 번역합니다.")
+
+    # Gemini 클라이언트 초기화
+    client = GeminiClient(model=DEFAULT_MODEL, thinking_budget=-1)
+
+    # 번역 프롬프트 구성
+    instruction_lines = [
+        f"Translate the following subtitle text into {job.target_language}.",
+        "Maintain the original meaning and tone.",
+        "Return ONLY the translated text, without any additional formatting or explanation.",
+    ]
+    if job.custom_prompt:
+        instruction_lines.append(f"\nAdditional instructions: {job.custom_prompt}")
+
+    base_instruction = "\n".join(instruction_lines)
+
+    # 각 엔트리 번역
+    for idx, subtitle in enumerate(subtitles):
+        job.processed_segments = idx
+        job.updated_at = _now()
+        job.append_log(f"엔트리 {idx + 1}/{job.total_segments} 번역 중: '{subtitle['text'][:50]}...'")
+
+        try:
+            # 텍스트 번역 요청
+            prompt = f"{base_instruction}\n\nText to translate:\n{subtitle['text']}"
+            response = client.send_message(message=prompt)
+
+            translated_text = response.strip()
+
+            # 타임스탬프를 초 단위로 변환
+            start_sec = _srt_timestamp_to_seconds(subtitle['start'])
+            end_sec = _srt_timestamp_to_seconds(subtitle['end'])
+
+            # 번역된 엔트리 추가
+            job.transcript_entries.append({
+                "start": start_sec,
+                "end": end_sec,
+                "text": translated_text,
+            })
+
+            job.append_log(f"번역 완료: '{translated_text[:50]}...'")
+
+            # RPM 보호 (마지막 엔트리가 아닌 경우만)
+            if idx < len(subtitles) - 1:
+                time.sleep(1)  # 1초 대기
+
+        except Exception as exc:
+            logger.exception(f"엔트리 {idx + 1} 번역 실패")
+            job.append_log(f"엔트리 {idx + 1} 번역 실패: {exc}. 원본 텍스트를 사용합니다.", level="warning")
+            # 실패 시 원본 텍스트 사용
+            start_sec = _srt_timestamp_to_seconds(subtitle['start'])
+            end_sec = _srt_timestamp_to_seconds(subtitle['end'])
+            job.transcript_entries.append({
+                "start": start_sec,
+                "end": end_sec,
+                "text": subtitle['text'],
+            })
+
+    job.processed_segments = job.total_segments
+
+
 def _run_job(job: SubtitleJob, youtube_url: Optional[str], uploaded_path: Optional[str], srt_path: Optional[str] = None) -> None:
     try:
+        # 원본 엔트리 유지 모드: 영상 없이 SRT만 번역
+        if job.keep_original_entries and srt_path:
+            _update_job(job, status="running", phase="translate", message="원본 자막 엔트리를 번역하는 중입니다.")
+            _translate_srt_entries_directly(job, srt_path)
+
+            # SRT 파일 저장
+            srt_output_path = os.path.join(job.output_dir, f"{job.job_id}.srt")
+            job.transcript_path = _write_srt(job.transcript_entries, srt_output_path)
+            _update_job(job, status="completed", phase="finished", message="번역이 완료되었습니다.")
+            return
+
+        # 기본 모드: 영상 분할 및 전사/번역
         _update_job(job, status="running", phase="source", message="영상 소스를 준비하는 중입니다.")
         job.source_path = _prepare_source_path(job, youtube_url, uploaded_path)
         job.append_log(f"소스 파일: {job.source_path}")

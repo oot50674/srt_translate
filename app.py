@@ -159,6 +159,7 @@ def api_create_subtitle_generation_job():
     transcription_mode = (request.form.get('transcription_mode') or 'transcribe').strip() or 'transcribe'
     target_language = (request.form.get('target_language') or '').strip()
     custom_prompt = (request.form.get('custom_prompt') or '').strip()
+    keep_original_entries = request.form.get('keep_original_entries') == 'on'
     chunk_minutes_raw = request.form.get('chunk_minutes') or 10
     try:
         chunk_minutes = float(chunk_minutes_raw)
@@ -175,6 +176,7 @@ def api_create_subtitle_generation_job():
             mode=transcription_mode,
             target_language=target_language or None,
             custom_prompt=custom_prompt or None,
+            keep_original_entries=keep_original_entries,
         )
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400
