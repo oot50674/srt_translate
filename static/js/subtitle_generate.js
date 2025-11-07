@@ -13,7 +13,11 @@
     const fileInput = document.getElementById('file-input');
     const selectBtn = document.getElementById('file-select-btn');
     const fileList = document.getElementById('file-list');
+    const customPromptInput = document.querySelector('textarea[name="custom_prompt"]');
+    const clearPromptBtn = document.getElementById('clear-custom-prompt-btn');
     const missingApiKey = String(document.body.dataset.missingApiKey || '').toLowerCase() === 'true';
+
+    const STORAGE_KEY = 'subtitle_generate_custom_prompt';
 
     function showAlert(message, type = 'error') {
         if (!alertBox) return;
@@ -230,12 +234,90 @@
         });
     }
 
+    function updateClearButtonVisibility() {
+        if (!clearPromptBtn || !customPromptInput) return;
+        const hasValue = customPromptInput.value.trim().length > 0;
+        const hasSaved = localStorage.getItem(STORAGE_KEY) !== null;
+        if (hasValue || hasSaved) {
+            clearPromptBtn.classList.remove('hidden');
+        } else {
+            clearPromptBtn.classList.add('hidden');
+        }
+    }
+
+    function loadCustomPrompt() {
+        if (!customPromptInput) return;
+        try {
+            const saved = localStorage.getItem(STORAGE_KEY);
+            if (saved) {
+                customPromptInput.value = saved;
+            }
+            updateClearButtonVisibility();
+        } catch (e) {
+            console.warn('Failed to load custom prompt from localStorage:', e);
+        }
+    }
+
+    function saveCustomPrompt() {
+        if (!customPromptInput) return;
+        try {
+            const value = customPromptInput.value.trim();
+            if (value) {
+                localStorage.setItem(STORAGE_KEY, value);
+            } else {
+                localStorage.removeItem(STORAGE_KEY);
+            }
+            updateClearButtonVisibility();
+        } catch (e) {
+            console.warn('Failed to save custom prompt to localStorage:', e);
+        }
+    }
+
+    function clearCustomPrompt() {
+        if (!customPromptInput) return;
+        try {
+            customPromptInput.value = '';
+            localStorage.removeItem(STORAGE_KEY);
+            updateClearButtonVisibility();
+            showAlert('저장된 프롬프트를 삭제했습니다.', 'success');
+            setTimeout(() => showAlert(''), 2000);
+        } catch (e) {
+            console.warn('Failed to clear custom prompt from localStorage:', e);
+        }
+    }
+
+    function bindCustomPromptStorage() {
+        if (!customPromptInput) return;
+
+        // 페이지 로드 시 저장된 프롬프트 불러오기
+        loadCustomPrompt();
+
+        // 입력 시 자동 저장 (디바운스 적용)
+        let saveTimeout;
+        customPromptInput.addEventListener('input', () => {
+            clearTimeout(saveTimeout);
+            saveTimeout = setTimeout(() => {
+                saveCustomPrompt();
+            }, 500); // 500ms 후 저장
+            updateClearButtonVisibility();
+        });
+
+        // 폼 제출 시에도 저장
+        customPromptInput.addEventListener('change', saveCustomPrompt);
+
+        // 지우기 버튼 이벤트
+        if (clearPromptBtn) {
+            clearPromptBtn.addEventListener('click', clearCustomPrompt);
+        }
+    }
+
     modeRadios.forEach(radio => {
         radio.addEventListener('change', toggleTranslationField);
     });
     toggleTranslationField();
     bindDropZone();
     bindFileSelect();
+    bindCustomPromptStorage();
 
     form?.addEventListener('submit', submitForm);
 })();

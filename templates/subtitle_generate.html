@@ -116,6 +116,25 @@
                                 </div>
                             </section>
 
+                            <section class="space-y-4">
+                                <div class="flex items-center justify-between">
+                                    <h2 class="text-lg font-semibold text-slate-900">추가 설정</h2>
+                                    <button type="button" id="clear-custom-prompt-btn" class="text-xs text-slate-500 hover:text-slate-700 underline hidden">
+                                        저장된 프롬프트 지우기
+                                    </button>
+                                </div>
+                                <div class="flex flex-col gap-2">
+                                    <label class="flex flex-col gap-2">
+                                        <span class="text-sm font-medium text-slate-700">커스텀 프롬프트 (선택사항)</span>
+                                        <textarea name="custom_prompt" rows="4" placeholder="예: 전문 용어를 정확하게 전사해주세요, 구어체를 자연스럽게 표현해주세요, 등" class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20 resize-none"></textarea>
+                                        <span class="text-xs text-slate-400">
+                                            <span class="material-icons text-xs align-middle">info</span>
+                                            LLM에게 전달할 추가 지시사항을 입력하세요. 입력 내용은 자동으로 브라우저에 저장되어 다음에도 사용할 수 있습니다.
+                                        </span>
+                                    </label>
+                                </div>
+                            </section>
+
                             <div class="flex items-center justify-between flex-wrap gap-3">
                                 <p class="text-xs text-slate-500" id="form-hint">영상 길이와 네트워크에 따라 다소 시간이 걸릴 수 있습니다.</p>
                                 <button type="submit" id="subtitle-submit-btn" class="flex min-w-[140px] items-center justify-center gap-2 rounded-md bg-[#0c77f2] px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-600 disabled:opacity-60 disabled:cursor-not-allowed">

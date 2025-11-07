@@ -158,6 +158,7 @@ def api_create_subtitle_generation_job():
     youtube_url = (request.form.get('youtube_url') or '').strip()
     transcription_mode = (request.form.get('transcription_mode') or 'transcribe').strip() or 'transcribe'
     target_language = (request.form.get('target_language') or '').strip()
+    custom_prompt = (request.form.get('custom_prompt') or '').strip()
     chunk_minutes_raw = request.form.get('chunk_minutes') or 10
     try:
         chunk_minutes = float(chunk_minutes_raw)
@@ -173,6 +174,7 @@ def api_create_subtitle_generation_job():
             chunk_minutes=chunk_minutes,
             mode=transcription_mode,
             target_language=target_language or None,
+            custom_prompt=custom_prompt or None,
         )
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400

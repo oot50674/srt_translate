@@ -293,9 +293,9 @@ def _create_segments_from_srt(job: "SubtitleJob", srt_path: str) -> List[Segment
         segment_filename = f"segment_{idx:04d}.mp4"
         segment_path = os.path.join(job.chunks_dir, segment_filename)
 
-        # FFmpeg 명령어 실행
+        # FFmpeg 명령어 실행 (PATH에 이미 등록되어 있음)
         cmd = [
-            ffmpeg_module.get_ffmpeg_path(),
+            'ffmpeg',
             '-i', job.source_path,
             '-ss', str(start_time),
             '-t', str(duration),
@@ -387,6 +387,7 @@ class SubtitleJob:
     chunk_minutes: float = 10.0
     mode: str = "transcribe"
     target_language: Optional[str] = None
+    custom_prompt: Optional[str] = None
     transcript_path: Optional[str] = None
     error: Optional[str] = None
     created_at: float = field(default_factory=_now)
@@ -414,6 +415,7 @@ class SubtitleJob:
             "chunk_minutes": self.chunk_minutes,
             "mode": self.mode,
             "target_language": self.target_language,
+            "custom_prompt": self.custom_prompt,
             "transcript_ready": bool(self.transcript_path and os.path.isfile(self.transcript_path)),
             "transcript_path": self.transcript_path,
             "created_at": self.created_at,
@@ -515,7 +517,7 @@ def _create_segments(job: SubtitleJob, minutes_per_segment: float) -> List[Segme
 
 
 def _transcribe_segment(client: GeminiClient, segment: SegmentState,
-                        mode: str, target_language: Optional[str]) -> Tuple[List[Dict[str, Any]], str]:
+                        mode: str, target_language: Optional[str], custom_prompt: Optional[str] = None) -> Tuple[List[Dict[str, Any]], str]:
     instruction_lines = [
         "You will receive a short video or audio clip.",
         "Return a JSON object following the provided schema with precise `start` and `end` timestamps in seconds relative to the beginning of this clip.",
@@ -530,6 +532,10 @@ def _transcribe_segment(client: GeminiClient, segment: SegmentState,
         )
     else:
         instruction_lines.append("Keep the language exactly as spoken in the clip.")
+
+    # 커스텀 프롬프트 추가
+    if custom_prompt:
+        instruction_lines.append(f"\nAdditional instructions: {custom_prompt}")
     whisper_windows = _build_whisper_windows(segment)
     if whisper_windows:
         instruction_lines.append("Use the following Whisper-derived segments (seconds from this clip's start). You may merge or split slightly, but do not exceed 10 seconds per subtitle entry:")
@@ -583,6 +589,7 @@ def start_job(
     chunk_minutes: float,
     mode: str,
     target_language: Optional[str],
+    custom_prompt: Optional[str],
 ) -> Dict[str, Any]:
     if chunk_minutes <= 0:
         raise ValueError("청크 길이는 0보다 커야 합니다.")
@@ -614,6 +621,7 @@ def start_job(
         mode=mode,
         target_language=target_language,
         youtube_url=youtube_url,
+        custom_prompt=custom_prompt,
     )
 
     with _LOCK:
@@ -697,7 +705,7 @@ def _run_job(job: SubtitleJob, youtube_url: Optional[str], uploaded_path: Option
                 job.append_log("SRT 파일이 제공되어 Whisper 단계를 건너뜁니다.")
 
             normalized, description = _transcribe_segment(
-                client, segment, job.mode, job.target_language
+                client, segment, job.mode, job.target_language, job.custom_prompt
             )
             segment.status = "completed"
             segment.message = description
