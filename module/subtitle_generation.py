@@ -18,6 +18,7 @@ from constants import BASE_DIR, DEFAULT_MODEL
 from module import ffmpeg_module
 from module.gemini_module import GeminiClient
 from module.video_split import SegmentMetadata, split_video_by_minutes, DEFAULT_STORAGE_KEY
+from module.Whisper_util import transcribe_audio_with_timestamps
 
 if TYPE_CHECKING:  # pragma: no cover
     from werkzeug.datastructures import FileStorage
@@ -67,6 +68,13 @@ def _format_timestamp(seconds: float) -> str:
 def _ensure_dir(path: str) -> str:
     os.makedirs(path, exist_ok=True)
     return path
+
+
+def _truncate_text(value: str, limit: int = 240) -> str:
+    text = (value or "").strip()
+    if not text or len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)].rstrip() + "..."
 
 
 def _write_srt(entries: List[Dict[str, Any]], dest: str) -> str:
@@ -143,6 +151,80 @@ def _build_speech_windows(
     return windows
 
 
+def _build_whisper_windows(segment: SegmentState, max_text_length: int = 80) -> List[Dict[str, Any]]:
+    if not segment.whisper_segments:
+        return []
+    windows: List[Dict[str, Any]] = []
+    for entry in segment.whisper_segments:
+        try:
+            start = max(0.0, float(entry.get("start", 0.0)))
+            end = max(start + 0.05, float(entry.get("end", start + 0.1)))
+        except (TypeError, ValueError):
+            continue
+        snippet = _truncate_text(entry.get("text", ""), max_text_length) or ""
+        windows.append(
+            {
+                "index": int(entry.get("index", len(windows) + 1)),
+                "start": round(start, 3),
+                "end": round(end, 3),
+                "text": snippet,
+            }
+        )
+    return windows
+
+
+def _build_whisper_context(segment: SegmentState, limit: int = 20) -> str:
+    if not segment.whisper_segments:
+        return ""
+    lines = ["Preliminary Whisper transcript (context only):"]
+    count = 0
+    for entry in segment.whisper_segments:
+        if count >= limit:
+            break
+        text = _truncate_text(entry.get("text", ""), 200)
+        if not text:
+            continue
+        start_ts = entry.get("start_timecode") or _format_timestamp(entry.get("start", 0.0))
+        end_ts = entry.get("end_timecode") or _format_timestamp(entry.get("end", 0.0))
+        lines.append(f"- [{start_ts} --> {end_ts}] {text}")
+        count += 1
+    if len(lines) == 1:
+        return ""
+    return "\n".join(lines)
+
+
+def _generate_whisper_segments(segment: SegmentState, language_hint: Optional[str] = None) -> List[Dict[str, Any]]:
+    raw_segments = transcribe_audio_with_timestamps(
+        segment.file_path,
+        language=language_hint,
+        show_progress=False,
+    )
+    formatted: List[Dict[str, Any]] = []
+    for idx, entry in enumerate(raw_segments, start=1):
+        try:
+            start = max(0.0, float(entry.get("start", 0.0)))
+            end = max(start + 0.05, float(entry.get("end", start + 0.1)))
+        except (TypeError, ValueError):
+            continue
+        text = str(entry.get("text", "")).strip()
+        clip_index = int(entry.get("index", idx))
+        formatted.append(
+            {
+                "index": clip_index,
+                "start": start,
+                "end": end,
+                "text": text,
+                "start_timecode": entry.get("start_timecode") or _format_timestamp(start),
+                "end_timecode": entry.get("end_timecode") or _format_timestamp(end),
+                "absolute_start": segment.start_time + start,
+                "absolute_end": segment.start_time + end,
+                "absolute_start_timecode": _format_timestamp(segment.start_time + start),
+                "absolute_end_timecode": _format_timestamp(segment.start_time + end),
+            }
+        )
+    return formatted
+
+
 def _download_youtube_video(url: str, output_dir: str) -> str:
     _ensure_dir(output_dir)
     ydl_opts = {
@@ -170,6 +252,7 @@ class SegmentState:
     duration: float
     file_path: str
     speech_segments: List[Dict[str, float]] = field(default_factory=list)
+    whisper_segments: List[Dict[str, Any]] = field(default_factory=list)
     status: str = "pending"
     message: str = ""
     transcript: List[Dict[str, Any]] = field(default_factory=list)
@@ -181,6 +264,7 @@ class SegmentState:
             "end_time": self.end_time,
             "duration": self.duration,
             "speech_segments": self.speech_segments,
+            "whisper_segments": self.whisper_segments,
             "status": self.status,
             "message": self.message,
             "file_name": os.path.basename(self.file_path),
@@ -346,10 +430,19 @@ def _transcribe_segment(client: GeminiClient, segment: SegmentState,
         )
     else:
         instruction_lines.append("Keep the language exactly as spoken in the clip.")
-    speech_windows = _build_speech_windows(segment)
-    if speech_windows:
-        instruction_lines.append("Use the following speech windows (seconds from this clip's start, each <=10s) as guidance. You may merge or split them further for readability, but never allow a subtitle entry to exceed 10 seconds:")
-        instruction_lines.append(json.dumps(speech_windows, ensure_ascii=False))
+    whisper_windows = _build_whisper_windows(segment)
+    if whisper_windows:
+        instruction_lines.append("Use the following Whisper-derived segments (seconds from this clip's start). You may merge or split slightly, but do not exceed 10 seconds per subtitle entry:")
+        instruction_lines.append(json.dumps(whisper_windows, ensure_ascii=False))
+    else:
+        speech_windows = _build_speech_windows(segment)
+        if speech_windows:
+            instruction_lines.append("Use the following speech windows (seconds from this clip's start, each <=10s) as guidance. You may merge or split them further for readability, but never allow a subtitle entry to exceed 10 seconds:")
+            instruction_lines.append(json.dumps(speech_windows, ensure_ascii=False))
+    whisper_context = _build_whisper_context(segment)
+    if whisper_context:
+        instruction_lines.append("Rely on the audio/video to confirm, but you may use this rough Whisper transcript as additional context:")
+        instruction_lines.append(whisper_context)
     instruction_lines.append("Do not include any additional fields.")
     prompt = "\n".join(instruction_lines)
 
@@ -474,6 +567,16 @@ def _run_job(job: SubtitleJob, youtube_url: Optional[str], uploaded_path: Option
             segment.message = "전사 중..."
             job.append_log(f"{segment.index}번 세그먼트 전사 중...")
             job.updated_at = _now()
+
+            try:
+                segment.whisper_segments = _generate_whisper_segments(segment)
+                if segment.whisper_segments:
+                    job.append_log(
+                        f"Whisper 참고 세그먼트 {len(segment.whisper_segments)}개를 확보했습니다."
+                    )
+            except Exception as whisper_exc:
+                segment.whisper_segments = []
+                job.append_log(f"Whisper 기반 세그먼트 생성 실패: {whisper_exc}")
 
             normalized, description = _transcribe_segment(
                 client, segment, job.mode, job.target_language
