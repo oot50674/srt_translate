@@ -240,47 +240,45 @@ def _srt_timestamp_to_seconds(timestamp: str) -> float:
 def _create_segments_from_srt(job: "SubtitleJob", srt_path: str) -> List[SegmentMetadata]:
     """업로드된 SRT 파일의 타임스탬프를 기준으로 세그먼트를 생성합니다.
 
-    SRT 엔트리들을 chunk_minutes 단위로 그룹화하여 세그먼트를 만들고,
-    각 세그먼트에 대해 FFmpeg로 비디오를 분할합니다.
+    전체 영상을 chunk_minutes 단위로 시간 구간으로 나누고,
+    각 구간에 해당하는 자막 엔트리들을 포함시킵니다.
     """
     # SRT 파일 파싱
     subtitles = srt_module.read_srt(srt_path)
     if not subtitles:
         raise ValueError("SRT 파일에 자막이 없습니다.")
 
-    # 타임스탬프를 초 단위로 변환
-    speech_segments = []
-    for subtitle in subtitles:
-        start_sec = _srt_timestamp_to_seconds(subtitle['start'])
-        end_sec = _srt_timestamp_to_seconds(subtitle['end'])
-        speech_segments.append({
-            'start': start_sec,
-            'end': end_sec,
-        })
+    # 전체 영상의 시작과 끝 시간 파악
+    first_start = _srt_timestamp_to_seconds(subtitles[0]['start'])
+    last_end = _srt_timestamp_to_seconds(subtitles[-1]['end'])
 
-    # 세그먼트 그룹화 (chunk_minutes 단위로)
+    job.append_log(f"SRT 파일 범위: {first_start:.2f}s ~ {last_end:.2f}s")
+
+    # chunk_minutes 단위로 시간 구간 나누기
     max_duration = job.chunk_minutes * 60.0
     groups: List[List[Dict[str, float]]] = []
-    current_group: List[Dict[str, float]] = []
-    group_start: Optional[float] = None
 
-    for seg in speech_segments:
-        if group_start is None:
-            group_start = seg['start']
+    current_time = first_start
+    while current_time < last_end:
+        segment_end = min(current_time + max_duration, last_end)
 
-        # 현재 세그먼트를 추가했을 때 그룹 시간이 max_duration을 초과하는지 확인
-        potential_end = seg['end']
-        if potential_end - group_start > max_duration and current_group:
-            # 현재 그룹을 저장하고 새 그룹 시작
-            groups.append(current_group)
-            current_group = [seg]
-            group_start = seg['start']
-        else:
-            current_group.append(seg)
+        # 이 시간 구간에 속하는 자막들 찾기
+        group = []
+        for subtitle in subtitles:
+            start_sec = _srt_timestamp_to_seconds(subtitle['start'])
+            end_sec = _srt_timestamp_to_seconds(subtitle['end'])
 
-    # 마지막 그룹 추가
-    if current_group:
-        groups.append(current_group)
+            # 자막이 현재 구간과 겹치는지 확인
+            if start_sec < segment_end and end_sec > current_time:
+                group.append({
+                    'start': start_sec,
+                    'end': end_sec,
+                })
+
+        if group:
+            groups.append(group)
+
+        current_time = segment_end
 
     # 각 그룹에 대해 비디오 분할 및 SegmentMetadata 생성
     segments_metadata: List[SegmentMetadata] = []
@@ -651,8 +649,8 @@ def start_job(
     return job.to_dict()
 
 
-def _translate_srt_entries_with_video(job: SubtitleJob, srt_path: str) -> None:
-    """원본 SRT 엔트리의 타임스탬프를 유지하면서 영상을 보고 번역합니다."""
+def _translate_srt_entries_with_video(job: SubtitleJob, srt_path: str, segments_metadata: List[SegmentMetadata]) -> None:
+    """원본 SRT 엔트리의 타임스탬프를 유지하면서 chunk 단위로 영상을 보고 번역합니다."""
     job.append_log("원본 자막 엔트리를 유지하면서 영상 분석 기반 번역을 시작합니다.")
 
     # SRT 파일 읽기
@@ -660,116 +658,169 @@ def _translate_srt_entries_with_video(job: SubtitleJob, srt_path: str) -> None:
     if not subtitles:
         raise ValueError("SRT 파일에 자막이 없습니다.")
 
-    job.total_segments = len(subtitles)
-    job.append_log(f"총 {job.total_segments}개의 자막 엔트리를 번역합니다.")
+    job.append_log(f"총 {len(subtitles)}개의 자막 엔트리를 {len(segments_metadata)}개 청크로 처리합니다.")
 
     # Gemini 클라이언트 초기화
     client = GeminiClient(model=DEFAULT_MODEL, thinking_budget=-1)
     client.start_chat()
 
-    # 각 엔트리별로 영상 세그먼트 생성 및 번역
-    for idx, subtitle in enumerate(subtitles):
-        job.processed_segments = idx
+    last_segment_start_at: Optional[float] = None
+
+    # 각 세그먼트(청크) 처리
+    for seg_idx, segment in enumerate(job.segments):
+        if last_segment_start_at is not None:
+            elapsed = max(0.0, time.time() - last_segment_start_at)
+            if elapsed < 60.0:
+                wait_seconds = 60.0 - elapsed
+                job.append_log(f"쿼터 보호를 위해 {wait_seconds:.1f}초 대기 후 다음 세그먼트를 처리합니다.")
+                time.sleep(wait_seconds)
+
+        last_segment_start_at = time.time()
+
+        segment.status = "processing"
+        segment.message = "번역 중..."
+        job.append_log(f"{segment.index}번 세그먼트 처리 중...")
         job.updated_at = _now()
-        job.append_log(f"엔트리 {idx + 1}/{job.total_segments} 처리 중: '{subtitle['text'][:50]}...'")
 
         try:
-            # 타임스탬프를 초 단위로 변환
-            start_sec = _srt_timestamp_to_seconds(subtitle['start'])
-            end_sec = _srt_timestamp_to_seconds(subtitle['end'])
-            duration = end_sec - start_sec
+            # 이 세그먼트 시간 범위에 속하는 자막들 찾기
+            segment_subtitles = []
+            for subtitle in subtitles:
+                start_sec = _srt_timestamp_to_seconds(subtitle['start'])
+                end_sec = _srt_timestamp_to_seconds(subtitle['end'])
 
-            # 해당 구간의 영상 세그먼트 추출
-            segment_filename = f"entry_{idx:04d}.mp4"
-            segment_path = os.path.join(job.chunks_dir, segment_filename)
+                # 자막이 세그먼트 범위와 겹치는지 확인
+                if start_sec < segment.end_time and end_sec > segment.start_time:
+                    segment_subtitles.append({
+                        'start': start_sec,
+                        'end': end_sec,
+                        'text': subtitle['text']
+                    })
 
-            # FFmpeg로 영상 분할
-            cmd = [
-                'ffmpeg',
-                '-i', job.source_path,
-                '-ss', str(start_sec),
-                '-t', str(duration),
-                '-c', 'copy',
-                '-y',
-                segment_path
-            ]
-            import subprocess
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode != 0:
-                logger.error(f"FFmpeg 분할 실패: {result.stderr}")
-                raise RuntimeError(f"엔트리 {idx} 영상 분할 실패")
+            if not segment_subtitles:
+                segment.status = "completed"
+                segment.message = "자막 없음"
+                job.processed_segments += 1
+                continue
+
+            job.append_log(f"세그먼트 {segment.index}에 {len(segment_subtitles)}개 자막 포함")
 
             # 번역 프롬프트 구성
             instruction_lines = [
-                "You will receive a short video clip with the original subtitle text.",
-                f"Watch the video and translate the subtitle into {job.target_language}.",
-                "Maintain the original meaning and tone while watching the visual context.",
-                "Return ONLY the translated text, without any additional formatting or explanation.",
+                "You will receive a video segment with subtitles.",
+                f"Translate each subtitle into {job.target_language} while watching the video for context.",
+                "Return a JSON array with the translated subtitles maintaining the exact same timestamps.",
+                "Each entry should have: start (seconds), end (seconds), text (translated).",
             ]
             if job.custom_prompt:
                 instruction_lines.append(f"\nAdditional instructions: {job.custom_prompt}")
 
-            instruction_lines.append(f"\nOriginal subtitle text:\n{subtitle['text']}")
+            # 원본 자막 리스트 추가
+            instruction_lines.append("\nOriginal subtitles:")
+            for sub in segment_subtitles:
+                instruction_lines.append(f"[{sub['start']:.2f}s - {sub['end']:.2f}s] {sub['text']}")
+
             prompt = "\n".join(instruction_lines)
 
             # Gemini에 영상과 함께 번역 요청
             response = client.send_message(
                 message=prompt,
-                media_paths=[segment_path],
-                max_wait_seconds=300
+                media_paths=[segment.file_path],
+                response_schema={
+                    "type": "object",
+                    "properties": {
+                        "subtitles": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "start": {"type": "number"},
+                                    "end": {"type": "number"},
+                                    "text": {"type": "string"}
+                                },
+                                "required": ["start", "end", "text"]
+                            }
+                        }
+                    },
+                    "required": ["subtitles"]
+                },
+                max_wait_seconds=600
             )
 
-            translated_text = response.strip()
+            # 응답 파싱
+            translated_subs = response.get('subtitles', [])
 
-            # 번역된 엔트리 추가
-            job.transcript_entries.append({
-                "start": start_sec,
-                "end": end_sec,
-                "text": translated_text,
-            })
+            # 번역된 자막들을 transcript_entries에 추가
+            for trans_sub in translated_subs:
+                job.transcript_entries.append({
+                    "start": trans_sub['start'],
+                    "end": trans_sub['end'],
+                    "text": trans_sub['text']
+                })
 
-            job.append_log(f"번역 완료: '{translated_text[:50]}...'")
+            segment.transcript = translated_subs
+            segment.status = "completed"
+            segment.message = f"{len(translated_subs)}개 자막 번역 완료"
+            job.processed_segments += 1
+            job.updated_at = _now()
 
-            # 영상 세그먼트 파일 삭제 (용량 절약)
-            try:
-                os.remove(segment_path)
-            except:
-                pass
-
-            # RPM 보호
-            if idx < len(subtitles) - 1:
-                time.sleep(2)  # 2초 대기
+            job.append_log(f"세그먼트 {segment.index} 번역 완료: {len(translated_subs)}개 자막")
 
         except Exception as exc:
-            logger.exception(f"엔트리 {idx + 1} 처리 실패")
-            job.append_log(f"엔트리 {idx + 1} 처리 실패: {exc}. 원본 텍스트를 사용합니다.", level="warning")
-            # 실패 시 원본 텍스트 사용
-            start_sec = _srt_timestamp_to_seconds(subtitle['start'])
-            end_sec = _srt_timestamp_to_seconds(subtitle['end'])
-            job.transcript_entries.append({
-                "start": start_sec,
-                "end": end_sec,
-                "text": subtitle['text'],
-            })
+            logger.exception(f"세그먼트 {segment.index} 처리 실패")
+            job.append_log(f"세그먼트 {segment.index} 처리 실패: {exc}. 원본 텍스트를 사용합니다.", level="warning")
 
-    job.processed_segments = job.total_segments
+            # 실패 시 원본 텍스트 사용
+            for sub in segment_subtitles:
+                job.transcript_entries.append({
+                    "start": sub['start'],
+                    "end": sub['end'],
+                    "text": sub['text']
+                })
+
+            segment.transcript = segment_subtitles
+            segment.status = "completed"
+            segment.message = "실패 (원본 사용)"
+            job.processed_segments += 1
+            job.updated_at = _now()
 
 
 def _run_job(job: SubtitleJob, youtube_url: Optional[str], uploaded_path: Optional[str], srt_path: Optional[str] = None) -> None:
     try:
-        # 원본 엔트리 유지 모드: SRT 타임스탬프로 영상을 나눠서 번역
+        # 원본 엔트리 유지 모드: SRT 타임스탬프 유지하면서 chunk 단위로 번역
         if job.keep_original_entries and srt_path:
             _update_job(job, status="running", phase="source", message="영상 소스를 준비하는 중입니다.")
             job.source_path = _prepare_source_path(job, youtube_url, uploaded_path)
             job.append_log(f"소스 파일: {job.source_path}")
 
-            _update_job(job, phase="translate", message="원본 자막 엔트리를 유지하면서 영상을 분석하여 번역합니다.")
+            _update_job(job, phase="split", message="영상을 청크 단위로 분할합니다.")
             ffmpeg_module.register_ffmpeg_path()
-            _translate_srt_entries_with_video(job, srt_path)
+
+            # SRT 기반으로 세그먼트 생성
+            segments_metadata = _create_segments_from_srt(job, srt_path)
+            job.total_segments = len(segments_metadata)
+
+            # 세그먼트 상태 초기화
+            job.segments = [
+                SegmentState(
+                    index=meta.index,
+                    start_time=meta.start_time,
+                    end_time=meta.end_time,
+                    duration=meta.duration,
+                    file_path=meta.file_path,
+                    speech_segments=meta.speech_segments,
+                )
+                for meta in segments_metadata
+            ]
+            job.append_log(f"{job.total_segments}개의 세그먼트가 생성되었습니다.")
+
+            _update_job(job, phase="translate", message="원본 자막 엔트리를 유지하면서 영상을 분석하여 번역합니다.")
+            _translate_srt_entries_with_video(job, srt_path, segments_metadata)
 
             # SRT 파일 저장
+            combined = sorted(job.transcript_entries, key=lambda item: item["start"])
             srt_output_path = os.path.join(job.output_dir, f"{job.job_id}.srt")
-            job.transcript_path = _write_srt(job.transcript_entries, srt_output_path)
+            job.transcript_path = _write_srt(combined, srt_output_path)
             _update_job(job, status="completed", phase="finished", message="번역이 완료되었습니다.")
             return
 
