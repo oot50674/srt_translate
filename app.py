@@ -246,7 +246,7 @@ def translate_srt_stream(content: str, client, target_lang: str = '한국어', b
         chunk_counter += 1
 
         chunk_prompt_base = base_user_prompt
-        chunk_image_paths: Optional[List[str]] = None
+        chunk_media_paths: Optional[List[str]] = None
         chunk_context_text: Optional[str] = None
 
         if video_stream_url and video_duration and snapshot_session_dir:
@@ -268,7 +268,7 @@ def translate_srt_stream(content: str, client, target_lang: str = '한국어', b
                     "영상의 주요 등장인물, 사건, 분위기를 한국어로 요약하고, "
                     "번역 시 주의해야 할 맥락이나 용어를 정리해 주세요."
                 )
-                chunk_image_paths = snapshot_paths
+                chunk_media_paths = snapshot_paths
                 chunk_context_text = (
                     f"[영상 청크 #{chunk_counter} 이미지 컨텍스트]\n"
                     f"- 엔트리 수: {entry_count}\n"
@@ -278,11 +278,11 @@ def translate_srt_stream(content: str, client, target_lang: str = '한국어', b
                 logger.info(
                     "청크 %s 이미지 %s장 경로 준비 완료",
                     chunk_counter,
-                    len(chunk_image_paths),
+                    len(chunk_media_paths),
                 )
             except Exception as exc:
                 logger.error("청크 %s 스냅샷 처리 실패: %s", chunk_counter, exc)
-                chunk_image_paths = None
+                chunk_media_paths = None
                 chunk_context_text = None
 
         prompt = build_translation_prompt(chunk_prompt_base, target_lang, batch)
@@ -356,7 +356,7 @@ def translate_srt_stream(content: str, client, target_lang: str = '한국어', b
                 stream_iterator = client.send_message_stream(
                     prompt,
                     response_schema=response_schema,
-                    image_paths=chunk_image_paths,
+                    media_paths=chunk_media_paths,
                 )
 
                 for chunk in stream_iterator:

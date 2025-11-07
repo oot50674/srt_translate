@@ -41,7 +41,7 @@ def download_youtube_video(url, output_path='./download_video'):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='유튜브 비디오를 다운로드하고 Gemini로 인식 테스트')
-    parser.add_argument('--url', type=str, default='https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+    parser.add_argument('--url', type=str, default='https://youtu.be/L0WyWY4pmvs?si=nc9Q7q3ap9RSDnDN',
                        help='유튜브 동영상 URL (기본값: Rick Astley - Never Gonna Give You Up)')
     parser.add_argument('-o', '--output', type=str, default='./download_video',
                        help='출력 디렉터리 (기본값: ./download_video)')
@@ -76,7 +76,7 @@ if __name__ == '__main__':
         client.start_chat()
 
         # 비디오 인식 테스트 실행 (통합 메서드 send_message 사용)
-        response = client.send_message(args.prompt, video_paths=video_path)
+        response = client.send_message(args.prompt, media_paths=video_path)
 
         # 결과 출력
         print(f"\n{'='*60}")
