@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 import time
 import uuid
@@ -15,6 +16,7 @@ from werkzeug.utils import secure_filename
 from yt_dlp import YoutubeDL
 
 from constants import BASE_DIR, DEFAULT_MODEL
+from google.genai import errors as genai_errors
 from module import ffmpeg_module, srt_module
 from module.gemini_module import GeminiClient
 from module.video_split import SegmentMetadata, split_video_by_minutes, DEFAULT_STORAGE_KEY
@@ -75,6 +77,87 @@ def _truncate_text(value: str, limit: int = 240) -> str:
     if not text or len(text) <= limit:
         return text
     return text[: max(0, limit - 3)].rstrip() + "..."
+
+
+_RETRY_DELAY_PATTERN = re.compile(r"retryDelay['\"]?\s*:\s*'?(?P<seconds>\d+(?:\.\d+)?)s", re.IGNORECASE)
+
+
+def _parse_retry_delay_value(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return max(0.0, float(value))
+    if isinstance(value, str):
+        match = re.match(r"^\s*(\d+(?:\.\d+)?)\s*(?:s|sec|seconds)?\s*$", value, re.IGNORECASE)
+        if match:
+            return max(0.0, float(match.group(1)))
+    return None
+
+
+def _extract_retry_delay_from_payload(payload: Any) -> Optional[float]:
+    if isinstance(payload, dict):
+        if "retryDelay" in payload:
+            delay = _parse_retry_delay_value(payload.get("retryDelay"))
+            if delay is not None:
+                return delay
+        details = payload.get("details")
+        if isinstance(details, list):
+            for detail in details:
+                delay = _extract_retry_delay_from_payload(detail)
+                if delay is not None:
+                    return delay
+    elif isinstance(payload, list):
+        for item in payload:
+            delay = _extract_retry_delay_from_payload(item)
+            if delay is not None:
+                return delay
+    return None
+
+
+def _get_retry_delay_seconds_from_error(error: Exception) -> Optional[float]:
+    for attr in ("error", "response", "details"):
+        payload = getattr(error, attr, None)
+        delay = _extract_retry_delay_from_payload(payload)
+        if delay is not None:
+            return delay
+    text = getattr(error, "message", None) or str(error)
+    match = _RETRY_DELAY_PATTERN.search(text)
+    if match:
+        return max(0.0, float(match.group("seconds")))
+    return None
+
+
+def _send_gemini_with_retry(
+    client: GeminiClient,
+    *,
+    job: Optional["SubtitleJob"],
+    context: str,
+    send_kwargs: Dict[str, Any],
+    max_attempts: int = 3,
+) -> Any:
+    last_error: Optional[Exception] = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return client.send_message(**send_kwargs)
+        except genai_errors.ClientError as exc:
+            last_error = exc
+            error_text = str(exc)
+            if "RESOURCE_EXHAUSTED" not in error_text.upper():
+                raise
+            retry_delay = _get_retry_delay_seconds_from_error(exc)
+            wait_seconds = max(5.0, (retry_delay or 0.0) + 5.0)
+            warning_text = (
+                f"{context} 중 Gemini 쿼터 제한에 도달했습니다. "
+                f"{wait_seconds:.1f}초 후 재시도합니다. (시도 {attempt}/{max_attempts})"
+            )
+            if job:
+                job.append_log(warning_text, level="warning")
+            else:
+                logger.warning(warning_text)
+            time.sleep(wait_seconds)
+    if last_error:
+        raise last_error
+    raise RuntimeError("Gemini 요청 재시도에 실패했습니다.")
 
 
 def _write_srt(entries: List[Dict[str, Any]], dest: str) -> str:
@@ -516,7 +599,7 @@ def _create_segments(job: SubtitleJob, minutes_per_segment: float) -> List[Segme
     )
 
 
-def _transcribe_segment(client: GeminiClient, segment: SegmentState,
+def _transcribe_segment(job: SubtitleJob, client: GeminiClient, segment: SegmentState,
                         mode: str, target_language: Optional[str], custom_prompt: Optional[str] = None) -> Tuple[List[Dict[str, Any]], str]:
     instruction_lines = [
         "You will receive a short video or audio clip.",
@@ -552,11 +635,16 @@ def _transcribe_segment(client: GeminiClient, segment: SegmentState,
     instruction_lines.append("Do not include any additional fields.")
     prompt = "\n".join(instruction_lines)
 
-    response = client.send_message(
-        message=prompt,
-        response_schema=TRANSCRIPT_RESPONSE_SCHEMA,
-        media_paths=segment.file_path,
-        max_wait_seconds=1200,
+    response = _send_gemini_with_retry(
+        client,
+        job=job,
+        context=f"{segment.index}번 세그먼트 전사",
+        send_kwargs={
+            "message": prompt,
+            "response_schema": TRANSCRIPT_RESPONSE_SCHEMA,
+            "media_paths": segment.file_path,
+            "max_wait_seconds": 1200,
+        },
     )
     payload = json.loads(response or "{}")
     segments = payload.get("segments", [])
@@ -724,28 +812,33 @@ def _translate_srt_entries_with_video(job: SubtitleJob, srt_path: str, segments_
             prompt = "\n".join(instruction_lines)
 
             # Gemini에 영상과 함께 번역 요청
-            response = client.send_message(
-                message=prompt,
-                media_paths=[segment.file_path],
-                response_schema={
-                    "type": "object",
-                    "properties": {
-                        "subtitles": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "start": {"type": "number"},
-                                    "end": {"type": "number"},
-                                    "text": {"type": "string"}
-                                },
-                                "required": ["start", "end", "text"]
+            response = _send_gemini_with_retry(
+                client,
+                job=job,
+                context=f"{segment.index}번 세그먼트 번역",
+                send_kwargs={
+                    "message": prompt,
+                    "media_paths": [segment.file_path],
+                    "response_schema": {
+                        "type": "object",
+                        "properties": {
+                            "subtitles": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "start": {"type": "number"},
+                                        "end": {"type": "number"},
+                                        "text": {"type": "string"}
+                                    },
+                                    "required": ["start", "end", "text"]
+                                }
                             }
-                        }
+                        },
+                        "required": ["subtitles"]
                     },
-                    "required": ["subtitles"]
+                    "max_wait_seconds": 600,
                 },
-                max_wait_seconds=600
             )
 
             # 응답 파싱
@@ -897,7 +990,7 @@ def _run_job(job: SubtitleJob, youtube_url: Optional[str], uploaded_path: Option
                 job.append_log("SRT 파일이 제공되어 Whisper 단계를 건너뜁니다.")
 
             normalized, description = _transcribe_segment(
-                client, segment, job.mode, job.target_language, job.custom_prompt
+                job, client, segment, job.mode, job.target_language, job.custom_prompt
             )
             segment.status = "completed"
             segment.message = description
