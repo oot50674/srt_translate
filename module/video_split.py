@@ -26,8 +26,8 @@ class SileroVAD:
         self,
         sampling_rate: int = 16000,
         threshold: float = 0.5,
-        min_speech_duration_ms: int = 250,
-        min_silence_duration_ms: int = 100,
+        min_speech_duration_ms: int = 100,
+        min_silence_duration_ms: int = 250,
         speech_pad_ms: int = 30,
         num_threads: int = 1,
     ) -> None:
