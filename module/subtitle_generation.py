@@ -749,7 +749,13 @@ def _translate_srt_entries_with_video(job: SubtitleJob, srt_path: str, segments_
             )
 
             # 응답 파싱
-            translated_subs = response.get('subtitles', [])
+            if isinstance(response, str):
+                payload = json.loads(response or "{}")
+            elif isinstance(response, dict):
+                payload = response
+            else:
+                payload = {}
+            translated_subs = payload.get('subtitles', [])
 
             # 번역된 자막들을 transcript_entries에 추가
             for trans_sub in translated_subs:
