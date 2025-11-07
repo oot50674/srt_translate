@@ -15,8 +15,6 @@
     const fileList = document.getElementById('file-list');
     const customPromptInput = document.querySelector('textarea[name="custom_prompt"]');
     const clearPromptBtn = document.getElementById('clear-custom-prompt-btn');
-    const keepOriginalEntriesWrapper = document.getElementById('keep-original-entries-wrapper');
-    const keepOriginalEntriesCheckbox = document.getElementById('keep-original-entries');
     const missingApiKey = String(document.body.dataset.missingApiKey || '').toLowerCase() === 'true';
 
     const STORAGE_KEY = 'subtitle_generate_custom_prompt';
@@ -57,7 +55,6 @@
         if (!translationLanguage) return;
         const needsTranslation = Array.from(modeRadios).some(radio => radio.checked && radio.value === 'translate');
         translationLanguage.classList.toggle('hidden', !needsTranslation);
-        updateKeepOriginalEntriesVisibility();
     }
 
     function isVideoFile(filename) {
@@ -105,30 +102,12 @@
         updateFileList(videoFile, srtFile);
     }
 
-    function updateKeepOriginalEntriesVisibility() {
-        if (!keepOriginalEntriesWrapper) return;
-
-        // SRT 파일이 있고 번역 모드일 때만 표시
-        const hasSrtFile = srtFileInput?.files && srtFileInput.files.length > 0;
-        const isTranslateMode = Array.from(modeRadios).some(radio => radio.checked && radio.value === 'translate');
-
-        if (hasSrtFile && isTranslateMode) {
-            keepOriginalEntriesWrapper.classList.remove('hidden');
-        } else {
-            keepOriginalEntriesWrapper.classList.add('hidden');
-            if (keepOriginalEntriesCheckbox) {
-                keepOriginalEntriesCheckbox.checked = false;
-            }
-        }
-    }
-
     function updateFileList(videoFile, srtFile) {
         if (!fileList) return;
 
         if (!videoFile && !srtFile) {
             fileList.classList.add('hidden');
             fileList.innerHTML = '';
-            updateKeepOriginalEntriesVisibility();
             return;
         }
 
@@ -170,31 +149,15 @@
                 updateFileList(videoFileInput.files?.[0] || null, null);
             });
         }
-
-        updateKeepOriginalEntriesVisibility();
     }
 
     function validateForm() {
         const youtubeUrl = form.elements.namedItem('youtube_url')?.value.trim();
         const videoFileSelected = videoFileInput?.files && videoFileInput.files.length > 0;
-        const srtFileSelected = srtFileInput?.files && srtFileInput.files.length > 0;
         const mode = Array.from(modeRadios).find(radio => radio.checked)?.value || 'transcribe';
         const targetLanguage = form.elements.namedItem('target_language')?.value.trim();
-        const keepOriginal = keepOriginalEntriesCheckbox?.checked || false;
-
-        // 원본 엔트리 유지 모드: SRT 파일 + 영상 필요
-        if (keepOriginal) {
-            if (!srtFileSelected) {
-                throw new Error('원본 엔트리 유지 모드에서는 SRT 파일이 필요합니다.');
-            }
-            if (!youtubeUrl && !videoFileSelected) {
-                throw new Error('원본 엔트리 유지 모드에서는 영상 파일도 필요합니다.');
-            }
-        } else {
-            // 일반 모드: 영상 필요
-            if (!youtubeUrl && !videoFileSelected) {
-                throw new Error('YouTube 링크 또는 영상 파일을 입력해 주세요.');
-            }
+        if (!youtubeUrl && !videoFileSelected) {
+            throw new Error('YouTube 링크 또는 영상 파일을 입력해 주세요.');
         }
 
         if (mode === 'translate' && !targetLanguage) {

@@ -31,24 +31,23 @@ logger = logging.getLogger(__name__)
 SUBTITLE_JOB_ROOT = os.path.join(BASE_DIR, "generated_subtitles")
 os.makedirs(SUBTITLE_JOB_ROOT, exist_ok=True)
 
-TRANSCRIPT_RESPONSE_SCHEMA: Dict[str, Any] = {
+ENTRY_UPDATE_RESPONSE_SCHEMA: Dict[str, Any] = {
     "type": "object",
     "properties": {
-        "segments": {
+        "entries": {
             "type": "array",
             "items": {
                 "type": "object",
                 "properties": {
-                    "start": {"type": "number"},
-                    "end": {"type": "number"},
+                    "index": {"type": "integer"},
                     "text": {"type": "string"},
                 },
-                "required": ["start", "end", "text"],
+                "required": ["index", "text"],
             },
             "default": [],
         }
     },
-    "required": ["segments"],
+    "required": ["entries"],
 }
 
 
@@ -407,6 +406,76 @@ def _create_segments_from_srt(job: "SubtitleJob", srt_path: str) -> List[Segment
     return segments_metadata
 
 
+def _load_entries_from_srt_file(srt_path: str) -> List[Dict[str, Any]]:
+    subtitles = srt_module.read_srt(srt_path)
+    entries: List[Dict[str, Any]] = []
+    for idx, subtitle in enumerate(subtitles, start=1):
+        start_sec = _srt_timestamp_to_seconds(subtitle["start"])
+        end_sec = _srt_timestamp_to_seconds(subtitle["end"])
+        entries.append(
+            {
+                "index": idx,
+                "start": start_sec,
+                "end": end_sec,
+                "text": subtitle["text"].strip(),
+                "original_text": subtitle["text"].strip(),
+            }
+        )
+    return entries
+
+
+def _build_entries_from_whisper(job: SubtitleJob) -> List[Dict[str, Any]]:
+    entries: List[Dict[str, Any]] = []
+    next_index = 1
+    for segment in job.segments:
+        try:
+            segment.whisper_segments = _generate_whisper_segments(segment)
+            if segment.whisper_segments:
+                job.append_log(
+                    f"{segment.index}번 세그먼트에서 Whisper 엔트리 {len(segment.whisper_segments)}개 확보"
+                )
+        except Exception as exc:
+            segment.whisper_segments = []
+            job.append_log(f"세그먼트 {segment.index} Whisper 분석 실패: {exc}", level="warning")
+            continue
+        for whisper in segment.whisper_segments:
+            start = float(whisper.get("absolute_start", segment.start_time + whisper.get("start", 0.0)))
+            end = float(whisper.get("absolute_end", segment.start_time + whisper.get("end", 0.0)))
+            text = str(whisper.get("text", "")).strip()
+            entries.append(
+                {
+                    "index": next_index,
+                    "start": start,
+                    "end": end,
+                    "text": text,
+                    "original_text": text,
+                }
+            )
+            next_index += 1
+    return entries
+
+
+def _initialize_job_entries(job: SubtitleJob, entries: List[Dict[str, Any]]) -> None:
+    ordered = sorted(entries, key=lambda item: item["start"])
+    for idx, entry in enumerate(ordered, start=1):
+        entry["index"] = idx
+        entry.setdefault("original_text", entry.get("text", ""))
+    job.transcript_entries = ordered
+    job.entry_index_map = {entry["index"]: entry for entry in ordered}
+
+
+def _entries_for_segment(job: SubtitleJob, segment: SegmentState) -> List[Dict[str, Any]]:
+    if not job.transcript_entries:
+        return []
+    selected: List[Dict[str, Any]] = []
+    for entry in job.transcript_entries:
+        if entry["start"] < segment.end_time and entry["end"] > segment.start_time:
+            selected.append(entry)
+        elif entry["start"] >= segment.end_time:
+            break
+    return selected
+
+
 def _download_youtube_video(url: str, output_dir: str) -> str:
     _ensure_dir(output_dir)
     ydl_opts = {
@@ -470,13 +539,13 @@ class SubtitleJob:
     mode: str = "transcribe"
     target_language: Optional[str] = None
     custom_prompt: Optional[str] = None
-    keep_original_entries: bool = False
     transcript_path: Optional[str] = None
     error: Optional[str] = None
     created_at: float = field(default_factory=_now)
     updated_at: float = field(default_factory=_now)
     segments: List[SegmentState] = field(default_factory=list)
     transcript_entries: List[Dict[str, Any]] = field(default_factory=list)
+    entry_index_map: Dict[int, Dict[str, Any]] = field(default_factory=dict)
     logs: List[Dict[str, Any]] = field(default_factory=list)
 
     def progress(self) -> float:
@@ -599,76 +668,6 @@ def _create_segments(job: SubtitleJob, minutes_per_segment: float) -> List[Segme
     )
 
 
-def _transcribe_segment(job: SubtitleJob, client: GeminiClient, segment: SegmentState,
-                        mode: str, target_language: Optional[str], custom_prompt: Optional[str] = None) -> Tuple[List[Dict[str, Any]], str]:
-    instruction_lines = [
-        "You will receive a short video or audio clip.",
-        "Return a JSON object following the provided schema with precise `start` and `end` timestamps in seconds relative to the beginning of this clip.",
-        "The `text` must contain a faithful transcription of the spoken content.",
-    ]
-    if mode == "translate" and target_language:
-        instruction_lines.append(
-            f"Translate the utterances into {target_language} while keeping speaker intent."
-        )
-        instruction_lines.append(
-            f"The `text` field must contain only the final {target_language} sentence (no source text, no language labels, no mixed output)."
-        )
-    else:
-        instruction_lines.append("Keep the language exactly as spoken in the clip.")
-
-    # 커스텀 프롬프트 추가
-    if custom_prompt:
-        instruction_lines.append(f"\nAdditional instructions: {custom_prompt}")
-    whisper_windows = _build_whisper_windows(segment)
-    if whisper_windows:
-        instruction_lines.append("Use the following Whisper-derived segments (seconds from this clip's start). You may merge or split slightly, but do not exceed 10 seconds per subtitle entry:")
-        instruction_lines.append(json.dumps(whisper_windows, ensure_ascii=False))
-    else:
-        speech_windows = _build_speech_windows(segment)
-        if speech_windows:
-            instruction_lines.append("Use the following speech windows (seconds from this clip's start, each <=10s) as guidance. You may merge or split them further for readability, but never allow a subtitle entry to exceed 10 seconds:")
-            instruction_lines.append(json.dumps(speech_windows, ensure_ascii=False))
-    whisper_context = _build_whisper_context(segment)
-    if whisper_context:
-        instruction_lines.append("Rely on the audio/video to confirm, but you may use this rough Whisper transcript as additional context:")
-        instruction_lines.append(whisper_context)
-    instruction_lines.append("Do not include any additional fields.")
-    prompt = "\n".join(instruction_lines)
-
-    response = _send_gemini_with_retry(
-        client,
-        job=job,
-        context=f"{segment.index}번 세그먼트 전사",
-        send_kwargs={
-            "message": prompt,
-            "response_schema": TRANSCRIPT_RESPONSE_SCHEMA,
-            "media_paths": segment.file_path,
-            "max_wait_seconds": 1200,
-        },
-    )
-    payload = json.loads(response or "{}")
-    segments = payload.get("segments", [])
-    normalized: List[Dict[str, Any]] = []
-    for item in segments:
-        try:
-            start = max(0.0, float(item.get("start", 0.0)))
-            end = max(start, float(item.get("end", start + 0.1)))
-            text = str(item.get("text", "")).strip()
-            if not text:
-                continue
-            normalized.append(
-                {
-                    "start": start + segment.start_time,
-                    "end": end + segment.start_time,
-                    "text": text,
-                }
-            )
-        except (TypeError, ValueError):
-            continue
-    description = f"{len(normalized)}개 문장이 감지되었습니다."
-    return normalized, description
-
-
 def start_job(
     *,
     youtube_url: Optional[str],
@@ -678,7 +677,6 @@ def start_job(
     mode: str,
     target_language: Optional[str],
     custom_prompt: Optional[str],
-    keep_original_entries: bool = False,
 ) -> Dict[str, Any]:
     if chunk_minutes <= 0:
         raise ValueError("청크 길이는 0보다 커야 합니다.")
@@ -689,20 +687,8 @@ def start_job(
     if not os.environ.get("GOOGLE_API_KEY"):
         raise ValueError("Google API Key가 설정되지 않았습니다.")
 
-    # 원본 엔트리 유지 모드: SRT 파일 + 영상 필요
-    if keep_original_entries:
-        if not (srt_file and srt_file.filename):
-            raise ValueError("원본 엔트리 유지 모드에서는 SRT 파일이 필요합니다.")
-        if not (youtube_url or (uploaded_file and uploaded_file.filename)):
-            raise ValueError("원본 엔트리 유지 모드에서는 영상 파일도 필요합니다.")
-        if mode != "translate":
-            raise ValueError("원본 엔트리 유지 모드는 번역 모드에서만 사용할 수 있습니다.")
-    else:
-        # 일반 모드: 영상이 필요
-        if not (youtube_url or (uploaded_file and uploaded_file.filename)):
-            raise ValueError("영상 파일 또는 YouTube 링크 중 하나가 필요합니다.")
-        if srt_file and srt_file.filename and not (uploaded_file and uploaded_file.filename):
-            raise ValueError("SRT 파일을 사용하려면 영상 파일도 함께 업로드해야 합니다.")
+    if not (youtube_url or (uploaded_file and uploaded_file.filename)):
+        raise ValueError("영상 파일 또는 YouTube 링크 중 하나가 필요합니다.")
 
     job_id = uuid.uuid4().hex
     output_dir = _ensure_dir(os.path.join(SUBTITLE_JOB_ROOT, job_id))
@@ -722,7 +708,6 @@ def start_job(
         target_language=target_language,
         youtube_url=youtube_url,
         custom_prompt=custom_prompt,
-        keep_original_entries=keep_original_entries,
     )
 
     with _LOCK:
@@ -738,193 +723,88 @@ def start_job(
     return job.to_dict()
 
 
-def _translate_srt_entries_with_video(job: SubtitleJob, srt_path: str, segments_metadata: List[SegmentMetadata]) -> None:
-    """원본 SRT 엔트리의 타임스탬프를 유지하면서 chunk 단위로 영상을 보고 번역합니다."""
-    job.append_log("원본 자막 엔트리를 유지하면서 영상 분석 기반 번역을 시작합니다.")
+def _process_segment_entries(
+    job: SubtitleJob,
+    client: GeminiClient,
+    segment: SegmentState,
+    segment_entries: List[Dict[str, Any]],
+) -> Tuple[int, List[Dict[str, Any]]]:
+    if not segment_entries:
+        return 0, []
+    task_label = "translate" if job.mode == "translate" else "transcribe"
+    instruction_lines = [
+        "You will receive a video segment and the fixed subtitle entries that belong to the same time range.",
+        "Each entry already has the correct start/end timestamps. Update only the text field while keeping the given indexes.",
+    ]
+    if job.mode == "translate" and job.target_language:
+        instruction_lines.append(
+            f"Translate every entry into {job.target_language} while keeping the speaker's intent and natural tone."
+        )
+        instruction_lines.append("Return only the translated sentences without source text or language labels.")
+    else:
+        instruction_lines.append("Provide a faithful transcription in the original spoken language.")
+    instruction_lines.append(
+        "Respond with JSON that follows the schema: { \"entries\": [ { \"index\": number, \"text\": string } ] }."
+    )
+    if job.custom_prompt:
+        instruction_lines.append(f"Additional instructions: {job.custom_prompt}")
+    instruction_lines.append("\nEntries:")
+    for entry in segment_entries:
+        start_ts = _format_timestamp(entry["start"])
+        end_ts = _format_timestamp(entry["end"])
+        preview = _truncate_text(entry.get("text", ""), 200)
+        instruction_lines.append(f"- #{entry['index']} [{start_ts} --> {end_ts}]: {preview}")
+    prompt = "\n".join(instruction_lines)
 
-    # SRT 파일 읽기
-    subtitles = srt_module.read_srt(srt_path)
-    if not subtitles:
-        raise ValueError("SRT 파일에 자막이 없습니다.")
-
-    job.append_log(f"총 {len(subtitles)}개의 자막 엔트리를 {len(segments_metadata)}개 청크로 처리합니다.")
-
-    # Gemini 클라이언트 초기화
-    client = GeminiClient(model=DEFAULT_MODEL, thinking_budget=-1)
-    client.start_chat()
-
-    last_segment_start_at: Optional[float] = None
-
-    # 각 세그먼트(청크) 처리
-    for seg_idx, segment in enumerate(job.segments):
-        if last_segment_start_at is not None:
-            elapsed = max(0.0, time.time() - last_segment_start_at)
-            if elapsed < 60.0:
-                wait_seconds = 60.0 - elapsed
-                job.append_log(f"쿼터 보호를 위해 {wait_seconds:.1f}초 대기 후 다음 세그먼트를 처리합니다.")
-                time.sleep(wait_seconds)
-
-        last_segment_start_at = time.time()
-
-        segment.status = "processing"
-        segment.message = "번역 중..."
-        job.append_log(f"{segment.index}번 세그먼트 처리 중...")
-        job.updated_at = _now()
-
+    response = _send_gemini_with_retry(
+        client,
+        job=job,
+        context=f"{segment.index}번 세그먼트 {task_label}",
+        send_kwargs={
+            "message": prompt,
+            "media_paths": [segment.file_path],
+            "response_schema": ENTRY_UPDATE_RESPONSE_SCHEMA,
+            "max_wait_seconds": 900,
+        },
+    )
+    if isinstance(response, str):
         try:
-            # 이 세그먼트 시간 범위에 속하는 자막들 찾기
-            segment_subtitles = []
-            for subtitle in subtitles:
-                start_sec = _srt_timestamp_to_seconds(subtitle['start'])
-                end_sec = _srt_timestamp_to_seconds(subtitle['end'])
-
-                # 자막이 세그먼트 범위와 겹치는지 확인
-                if start_sec < segment.end_time and end_sec > segment.start_time:
-                    segment_subtitles.append({
-                        'start': start_sec,
-                        'end': end_sec,
-                        'text': subtitle['text']
-                    })
-
-            if not segment_subtitles:
-                segment.status = "completed"
-                segment.message = "자막 없음"
-                job.processed_segments += 1
-                continue
-
-            job.append_log(f"세그먼트 {segment.index}에 {len(segment_subtitles)}개 자막 포함")
-
-            # 번역 프롬프트 구성
-            instruction_lines = [
-                "You will receive a video segment with subtitles.",
-                f"Translate each subtitle into {job.target_language} while watching the video for context.",
-                "Return a JSON array with the translated subtitles maintaining the exact same timestamps.",
-                "Each entry should have: start (seconds), end (seconds), text (translated).",
-            ]
-            if job.custom_prompt:
-                instruction_lines.append(f"\nAdditional instructions: {job.custom_prompt}")
-
-            # 원본 자막 리스트 추가
-            instruction_lines.append("\nOriginal subtitles:")
-            for sub in segment_subtitles:
-                instruction_lines.append(f"[{sub['start']:.2f}s - {sub['end']:.2f}s] {sub['text']}")
-
-            prompt = "\n".join(instruction_lines)
-
-            # Gemini에 영상과 함께 번역 요청
-            response = _send_gemini_with_retry(
-                client,
-                job=job,
-                context=f"{segment.index}번 세그먼트 번역",
-                send_kwargs={
-                    "message": prompt,
-                    "media_paths": [segment.file_path],
-                    "response_schema": {
-                        "type": "object",
-                        "properties": {
-                            "subtitles": {
-                                "type": "array",
-                                "items": {
-                                    "type": "object",
-                                    "properties": {
-                                        "start": {"type": "number"},
-                                        "end": {"type": "number"},
-                                        "text": {"type": "string"}
-                                    },
-                                    "required": ["start", "end", "text"]
-                                }
-                            }
-                        },
-                        "required": ["subtitles"]
-                    },
-                    "max_wait_seconds": 600,
-                },
-            )
-
-            # 응답 파싱
-            if isinstance(response, str):
-                payload = json.loads(response or "{}")
-            elif isinstance(response, dict):
-                payload = response
-            else:
-                payload = {}
-            translated_subs = payload.get('subtitles', [])
-
-            # 번역된 자막들을 transcript_entries에 추가
-            for trans_sub in translated_subs:
-                job.transcript_entries.append({
-                    "start": trans_sub['start'],
-                    "end": trans_sub['end'],
-                    "text": trans_sub['text']
-                })
-
-            segment.transcript = translated_subs
-            segment.status = "completed"
-            segment.message = f"{len(translated_subs)}개 자막 번역 완료"
-            job.processed_segments += 1
-            job.updated_at = _now()
-
-            job.append_log(f"세그먼트 {segment.index} 번역 완료: {len(translated_subs)}개 자막")
-
-        except Exception as exc:
-            logger.exception(f"세그먼트 {segment.index} 처리 실패")
-            job.append_log(f"세그먼트 {segment.index} 처리 실패: {exc}. 원본 텍스트를 사용합니다.", level="warning")
-
-            # 실패 시 원본 텍스트 사용
-            for sub in segment_subtitles:
-                job.transcript_entries.append({
-                    "start": sub['start'],
-                    "end": sub['end'],
-                    "text": sub['text']
-                })
-
-            segment.transcript = segment_subtitles
-            segment.status = "completed"
-            segment.message = "실패 (원본 사용)"
-            job.processed_segments += 1
-            job.updated_at = _now()
+            payload = json.loads(response or "{}")
+        except json.JSONDecodeError:
+            payload = {}
+    elif isinstance(response, dict):
+        payload = response
+    else:
+        payload = {}
+    updates = payload.get("entries", []) or []
+    updated_records: List[Dict[str, Any]] = []
+    update_count = 0
+    for update in updates:
+        try:
+            entry_index = int(update.get("index"))
+        except (TypeError, ValueError):
+            continue
+        text = str(update.get("text", "")).strip()
+        if not text:
+            continue
+        entry_ref = job.entry_index_map.get(entry_index)
+        if not entry_ref:
+            continue
+        entry_ref["text"] = text
+        updated_records.append(
+            {
+                "index": entry_index,
+                "start": entry_ref["start"],
+                "end": entry_ref["end"],
+                "text": text,
+            }
+        )
+        update_count += 1
+    return update_count, updated_records
 
 
 def _run_job(job: SubtitleJob, youtube_url: Optional[str], uploaded_path: Optional[str], srt_path: Optional[str] = None) -> None:
     try:
-        # 원본 엔트리 유지 모드: SRT 타임스탬프 유지하면서 chunk 단위로 번역
-        if job.keep_original_entries and srt_path:
-            _update_job(job, status="running", phase="source", message="영상 소스를 준비하는 중입니다.")
-            job.source_path = _prepare_source_path(job, youtube_url, uploaded_path)
-            job.append_log(f"소스 파일: {job.source_path}")
-
-            _update_job(job, phase="split", message="영상을 청크 단위로 분할합니다.")
-            ffmpeg_module.register_ffmpeg_path()
-
-            # SRT 기반으로 세그먼트 생성
-            segments_metadata = _create_segments_from_srt(job, srt_path)
-            job.total_segments = len(segments_metadata)
-
-            # 세그먼트 상태 초기화
-            job.segments = [
-                SegmentState(
-                    index=meta.index,
-                    start_time=meta.start_time,
-                    end_time=meta.end_time,
-                    duration=meta.duration,
-                    file_path=meta.file_path,
-                    speech_segments=meta.speech_segments,
-                )
-                for meta in segments_metadata
-            ]
-            job.append_log(f"{job.total_segments}개의 세그먼트가 생성되었습니다.")
-
-            _update_job(job, phase="translate", message="원본 자막 엔트리를 유지하면서 영상을 분석하여 번역합니다.")
-            _translate_srt_entries_with_video(job, srt_path, segments_metadata)
-
-            # SRT 파일 저장
-            combined = sorted(job.transcript_entries, key=lambda item: item["start"])
-            srt_output_path = os.path.join(job.output_dir, f"{job.job_id}.srt")
-            job.transcript_path = _write_srt(combined, srt_output_path)
-            _update_job(job, status="completed", phase="finished", message="번역이 완료되었습니다.")
-            return
-
-        # 기본 모드: 영상 분할 및 전사/번역
         _update_job(job, status="running", phase="source", message="영상 소스를 준비하는 중입니다.")
         job.source_path = _prepare_source_path(job, youtube_url, uploaded_path)
         job.append_log(f"소스 파일: {job.source_path}")
@@ -932,14 +812,15 @@ def _run_job(job: SubtitleJob, youtube_url: Optional[str], uploaded_path: Option
         _update_job(job, phase="split", message="영상 분할을 시작합니다.")
         ffmpeg_module.register_ffmpeg_path()
 
-        # SRT 파일이 제공된 경우 VAD/Whisper를 건너뛰고 SRT 기반으로 세그먼트 생성
         if srt_path:
-            job.append_log(f"업로드된 SRT 파일을 사용하여 세그먼트를 생성합니다: {srt_path}")
+            job.append_log(f"SRT 타임스탬프를 기반으로 세그먼트를 생성합니다: {srt_path}")
             segments_metadata = _create_segments_from_srt(job, srt_path)
         else:
             segments_metadata = _create_segments(job, job.chunk_minutes)
 
         job.total_segments = len(segments_metadata)
+        if job.total_segments == 0:
+            raise ValueError("생성된 세그먼트가 없습니다.")
 
         job.segments = [
             SegmentState(
@@ -954,10 +835,24 @@ def _run_job(job: SubtitleJob, youtube_url: Optional[str], uploaded_path: Option
         ]
         job.append_log(f"{job.total_segments}개의 세그먼트가 생성되었습니다.")
 
-        _update_job(job, phase="transcribe", message="Gemini로 전사를 시작합니다.")
+        _update_job(job, phase="entries", message="기본 자막 엔트리를 준비합니다.")
+        if srt_path:
+            base_entries = _load_entries_from_srt_file(srt_path)
+            job.append_log(f"SRT 자막 엔트리 {len(base_entries)}개를 불러왔습니다.")
+        else:
+            job.append_log("Whisper를 사용해 기본 자막 엔트리를 생성합니다.")
+            base_entries = _build_entries_from_whisper(job)
+            job.append_log(f"Whisper 자막 엔트리 {len(base_entries)}개를 확보했습니다.")
+        if not base_entries:
+            raise ValueError("처리할 자막 엔트리를 생성하지 못했습니다.")
+        _initialize_job_entries(job, base_entries)
+        job.append_log("자막 엔트리 초기화 완료.")
+
+        _update_job(job, phase="llm", message="LLM이 영상과 엔트리를 함께 분석합니다.")
         client = GeminiClient(model=DEFAULT_MODEL, thinking_budget=-1)
         client.start_chat()
         last_segment_start_at: Optional[float] = None
+        task_label = "번역" if job.mode == "translate" else "전사"
 
         for segment in job.segments:
             if last_segment_start_at is not None:
@@ -968,50 +863,68 @@ def _run_job(job: SubtitleJob, youtube_url: Optional[str], uploaded_path: Option
                     time.sleep(wait_seconds)
 
             last_segment_start_at = time.time()
-
             segment.status = "processing"
-            segment.message = "전사 중..."
-            job.append_log(f"{segment.index}번 세그먼트 전사 중...")
+            segment.message = f"{task_label} 중..."
+            job.append_log(f"{segment.index}번 세그먼트 {task_label} 중...")
             job.updated_at = _now()
 
-            # SRT 파일이 제공된 경우 Whisper 단계를 건너뜀
-            if not srt_path:
-                try:
-                    segment.whisper_segments = _generate_whisper_segments(segment)
-                    if segment.whisper_segments:
-                        job.append_log(
-                            f"Whisper 참고 세그먼트 {len(segment.whisper_segments)}개를 확보했습니다."
-                        )
-                except Exception as whisper_exc:
-                    segment.whisper_segments = []
-                    job.append_log(f"Whisper 기반 세그먼트 생성 실패: {whisper_exc}")
-            else:
-                segment.whisper_segments = []
-                job.append_log("SRT 파일이 제공되어 Whisper 단계를 건너뜁니다.")
+            segment_entries = _entries_for_segment(job, segment)
+            if not segment_entries:
+                segment.status = "completed"
+                segment.message = "처리할 자막 없음"
+                job.processed_segments += 1
+                job.updated_at = _now()
+                continue
 
-            normalized, description = _transcribe_segment(
-                job, client, segment, job.mode, job.target_language, job.custom_prompt
-            )
-            segment.status = "completed"
-            segment.message = description
-            segment.transcript = normalized
-            job.transcript_entries.extend(normalized)
-
-            job.processed_segments += 1
-            job.updated_at = _now()
-            context_text = _build_transcript_context(job.transcript_entries)
-            if context_text:
-                history_seed = [{'role': 'user', 'parts': [{'text': context_text}]}]
-            else:
-                history_seed = []
-            client.start_chat(history=history_seed, suppress_log=True, reset_usage=False)
+            try:
+                updated_count, updated_records = _process_segment_entries(job, client, segment, segment_entries)
+                if updated_count == 0:
+                    segment.message = "응답 없음 (원본 유지)"
+                else:
+                    segment.message = f"{updated_count}개 엔트리 {task_label} 완료"
+                segment.transcript = updated_records or [
+                    {
+                        "index": entry["index"],
+                        "start": entry["start"],
+                        "end": entry["end"],
+                        "text": entry.get("text", ""),
+                    }
+                    for entry in segment_entries
+                ]
+                job.append_log(f"{segment.index}번 세그먼트 {task_label} 완료: {updated_count}개 업데이트")
+            except Exception as exc:
+                logger.exception("세그먼트 %s 처리 실패", segment.index)
+                job.append_log(
+                    f"{segment.index}번 세그먼트 처리 실패: {exc}. 원본 텍스트를 유지합니다.",
+                    level="warning",
+                )
+                segment.transcript = [
+                    {
+                        "index": entry["index"],
+                        "start": entry["start"],
+                        "end": entry["end"],
+                        "text": entry.get("text", ""),
+                    }
+                    for entry in segment_entries
+                ]
+                segment.message = "실패 (원본 유지)"
+            finally:
+                segment.status = "completed"
+                job.processed_segments += 1
+                job.updated_at = _now()
+                context_text = _build_transcript_context(job.transcript_entries)
+                if context_text:
+                    history_seed = [{'role': 'user', 'parts': [{'text': context_text}]}]
+                else:
+                    history_seed = []
+                client.start_chat(history=history_seed, suppress_log=True, reset_usage=False)
 
         combined = sorted(job.transcript_entries, key=lambda item: item["start"])
         if not combined:
-            job.append_log("전사된 문장을 찾지 못했습니다.")
-        srt_path = os.path.join(job.output_dir, f"{job.job_id}.srt")
-        job.transcript_path = _write_srt(combined, srt_path)
-        _update_job(job, status="completed", phase="finished", message="전사 작업이 완료되었습니다.")
+            job.append_log("최종 자막 엔트리가 없습니다.")
+        output_path = os.path.join(job.output_dir, f"{job.job_id}.srt")
+        job.transcript_path = _write_srt(combined, output_path)
+        _update_job(job, status="completed", phase="finished", message=f"{task_label} 작업이 완료되었습니다.")
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.exception("Subtitle job %s failed", job.job_id)
         _update_job(job, status="failed", phase="error", message="작업 중 오류가 발생했습니다.", error=str(exc))
