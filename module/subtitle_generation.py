@@ -107,11 +107,17 @@ def _build_transcript_context(entries: List[Dict[str, Any]], limit: int = 20) ->
     return "\n".join(lines)
 
 
-def _build_speech_windows(segment: SegmentState, max_chunk_seconds: float = 10.0) -> List[Dict[str, float]]:
+def _build_speech_windows(
+    segment: SegmentState,
+    max_chunk_seconds: float = 10.0,
+    pad_before: float = 0.25,
+    pad_after: float = 0.25,
+) -> List[Dict[str, float]]:
     if not segment.speech_segments:
         return []
     windows: List[Dict[str, float]] = []
     clip_start = segment.start_time
+    clip_duration = segment.duration
     for speech in segment.speech_segments:
         try:
             abs_start = max(0.0, float(speech.get("start", 0.0)))
@@ -121,10 +127,19 @@ def _build_speech_windows(segment: SegmentState, max_chunk_seconds: float = 10.0
         rel_start = max(0.0, abs_start - clip_start)
         rel_end = max(rel_start + 0.05, abs_end - clip_start)
         current = rel_start
+        is_first_chunk = True
         while current < rel_end - 1e-6:
+            chunk_start = current
             chunk_end = min(rel_end, current + max_chunk_seconds)
-            windows.append({"start": round(current, 3), "end": round(chunk_end, 3)})
+            start_val = chunk_start
+            end_val = chunk_end
+            if is_first_chunk:
+                start_val = max(0.0, chunk_start - pad_before)
+            if chunk_end >= rel_end - 1e-6:
+                end_val = min(clip_duration, chunk_end + pad_after)
+            windows.append({"start": round(start_val, 3), "end": round(end_val, 3)})
             current = chunk_end
+            is_first_chunk = False
     return windows
 
 
