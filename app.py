@@ -164,6 +164,7 @@ def api_create_subtitle_generation_job():
         chunk_minutes = float(chunk_minutes_raw)
     except (TypeError, ValueError):
         chunk_minutes = 10.0
+    model_name = (request.form.get('model') or '').strip() or DEFAULT_MODEL
     video_file = request.files.get('video_file')
     srt_file = request.files.get('srt_file')
     try:
@@ -175,6 +176,7 @@ def api_create_subtitle_generation_job():
                 mode=transcription_mode,
                 target_language=target_language or None,
                 custom_prompt=custom_prompt or None,
+                model_name=model_name,
             )
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400

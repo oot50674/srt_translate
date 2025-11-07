@@ -539,6 +539,7 @@ class SubtitleJob:
     mode: str = "transcribe"
     target_language: Optional[str] = None
     custom_prompt: Optional[str] = None
+    model_name: str = DEFAULT_MODEL
     transcript_path: Optional[str] = None
     error: Optional[str] = None
     created_at: float = field(default_factory=_now)
@@ -568,6 +569,7 @@ class SubtitleJob:
             "mode": self.mode,
             "target_language": self.target_language,
             "custom_prompt": self.custom_prompt,
+            "model_name": self.model_name,
             "transcript_ready": bool(self.transcript_path and os.path.isfile(self.transcript_path)),
             "transcript_path": self.transcript_path,
             "created_at": self.created_at,
@@ -677,6 +679,7 @@ def start_job(
     mode: str,
     target_language: Optional[str],
     custom_prompt: Optional[str],
+    model_name: str = DEFAULT_MODEL,
 ) -> Dict[str, Any]:
     if chunk_minutes <= 0:
         raise ValueError("청크 길이는 0보다 커야 합니다.")
@@ -708,6 +711,7 @@ def start_job(
         target_language=target_language,
         youtube_url=youtube_url,
         custom_prompt=custom_prompt,
+        model_name=model_name,
     )
 
     with _LOCK:
@@ -849,7 +853,7 @@ def _run_job(job: SubtitleJob, youtube_url: Optional[str], uploaded_path: Option
         job.append_log("자막 엔트리 초기화 완료.")
 
         _update_job(job, phase="llm", message="LLM이 영상과 엔트리를 함께 분석합니다.")
-        client = GeminiClient(model=DEFAULT_MODEL, thinking_budget=-1)
+        client = GeminiClient(model=job.model_name, thinking_budget=-1)
         client.start_chat()
         last_segment_start_at: Optional[float] = None
         task_label = "번역" if job.mode == "translate" else "전사"

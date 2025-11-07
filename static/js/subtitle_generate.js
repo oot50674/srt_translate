@@ -17,7 +17,13 @@
     const clearPromptBtn = document.getElementById('clear-custom-prompt-btn');
     const missingApiKey = String(document.body.dataset.missingApiKey || '').toLowerCase() === 'true';
 
-    const STORAGE_KEY = 'subtitle_generate_custom_prompt';
+    const STORAGE_KEYS = {
+        transcription_mode: 'subtitle_generate_transcription_mode',
+        target_language: 'subtitle_generate_target_language',
+        chunk_minutes: 'subtitle_generate_chunk_minutes',
+        model: 'subtitle_generate_model',
+        custom_prompt: 'subtitle_generate_custom_prompt'
+    };
 
     function showAlert(message, type = 'error') {
         if (!alertBox) return;
@@ -239,10 +245,93 @@
         });
     }
 
+    function getStorageValue(key) {
+        try {
+            return localStorage.getItem(STORAGE_KEYS[key]);
+        } catch (e) {
+            console.warn(`Failed to get ${key} from localStorage:`, e);
+            return null;
+        }
+    }
+
+    function setStorageValue(key, value) {
+        try {
+            if (value && value.trim()) {
+                localStorage.setItem(STORAGE_KEYS[key], value.trim());
+            } else {
+                localStorage.removeItem(STORAGE_KEYS[key]);
+            }
+        } catch (e) {
+            console.warn(`Failed to save ${key} to localStorage:`, e);
+        }
+    }
+
+    function loadStoredValues() {
+        // 전사 모드 로드
+        const transcriptionMode = getStorageValue('transcription_mode');
+        if (transcriptionMode) {
+            const radio = document.querySelector(`input[name="transcription_mode"][value="${transcriptionMode}"]`);
+            if (radio) {
+                radio.checked = true;
+                toggleTranslationField();
+            }
+        }
+
+        // 번역 언어 로드
+        const targetLanguage = getStorageValue('target_language');
+        if (targetLanguage) {
+            const langInput = form.elements.namedItem('target_language');
+            if (langInput) langInput.value = targetLanguage;
+        }
+
+        // 청크 길이 로드
+        const chunkMinutes = getStorageValue('chunk_minutes');
+        if (chunkMinutes) {
+            const chunkInput = form.elements.namedItem('chunk_minutes');
+            if (chunkInput) chunkInput.value = chunkMinutes;
+        }
+
+        // 모델 로드
+        const model = getStorageValue('model');
+        if (model) {
+            const modelInput = form.elements.namedItem('model');
+            if (modelInput) modelInput.value = model;
+        }
+
+        // 커스텀 프롬프트 로드
+        const customPrompt = getStorageValue('custom_prompt');
+        if (customPrompt && customPromptInput) {
+            customPromptInput.value = customPrompt;
+        }
+
+        updateClearButtonVisibility();
+    }
+
+    function saveFormValues() {
+        // 전사 모드 저장
+        const checkedMode = Array.from(modeRadios).find(radio => radio.checked);
+        if (checkedMode) setStorageValue('transcription_mode', checkedMode.value);
+
+        // 번역 언어 저장
+        const langInput = form.elements.namedItem('target_language');
+        if (langInput) setStorageValue('target_language', langInput.value);
+
+        // 청크 길이 저장
+        const chunkInput = form.elements.namedItem('chunk_minutes');
+        if (chunkInput) setStorageValue('chunk_minutes', chunkInput.value);
+
+        // 모델 저장
+        const modelInput = form.elements.namedItem('model');
+        if (modelInput) setStorageValue('model', modelInput.value);
+
+        // 커스텀 프롬프트 저장
+        if (customPromptInput) setStorageValue('custom_prompt', customPromptInput.value);
+    }
+
     function updateClearButtonVisibility() {
         if (!clearPromptBtn || !customPromptInput) return;
         const hasValue = customPromptInput.value.trim().length > 0;
-        const hasSaved = localStorage.getItem(STORAGE_KEY) !== null;
+        const hasSaved = getStorageValue('custom_prompt') !== null;
         if (hasValue || hasSaved) {
             clearPromptBtn.classList.remove('hidden');
         } else {
@@ -250,39 +339,11 @@
         }
     }
 
-    function loadCustomPrompt() {
-        if (!customPromptInput) return;
-        try {
-            const saved = localStorage.getItem(STORAGE_KEY);
-            if (saved) {
-                customPromptInput.value = saved;
-            }
-            updateClearButtonVisibility();
-        } catch (e) {
-            console.warn('Failed to load custom prompt from localStorage:', e);
-        }
-    }
-
-    function saveCustomPrompt() {
-        if (!customPromptInput) return;
-        try {
-            const value = customPromptInput.value.trim();
-            if (value) {
-                localStorage.setItem(STORAGE_KEY, value);
-            } else {
-                localStorage.removeItem(STORAGE_KEY);
-            }
-            updateClearButtonVisibility();
-        } catch (e) {
-            console.warn('Failed to save custom prompt to localStorage:', e);
-        }
-    }
-
     function clearCustomPrompt() {
         if (!customPromptInput) return;
         try {
             customPromptInput.value = '';
-            localStorage.removeItem(STORAGE_KEY);
+            localStorage.removeItem(STORAGE_KEYS.custom_prompt);
             updateClearButtonVisibility();
             showAlert('저장된 프롬프트를 삭제했습니다.', 'success');
             setTimeout(() => showAlert(''), 2000);
@@ -291,38 +352,61 @@
         }
     }
 
-    function bindCustomPromptStorage() {
-        if (!customPromptInput) return;
+    function bindFormValueStorage() {
+        // 페이지 로드 시 저장된 값들 불러오기
+        loadStoredValues();
 
-        // 페이지 로드 시 저장된 프롬프트 불러오기
-        loadCustomPrompt();
+        // 입력 필드들에 change 이벤트 바인딩
+        const inputsToWatch = [
+            'target_language',
+            'chunk_minutes',
+            'model'
+        ];
 
-        // 입력 시 자동 저장 (디바운스 적용)
-        let saveTimeout;
-        customPromptInput.addEventListener('input', () => {
-            clearTimeout(saveTimeout);
-            saveTimeout = setTimeout(() => {
-                saveCustomPrompt();
-            }, 500); // 500ms 후 저장
-            updateClearButtonVisibility();
+        inputsToWatch.forEach(name => {
+            const input = form.elements.namedItem(name);
+            if (input) {
+                input.addEventListener('change', saveFormValues);
+                input.addEventListener('input', saveFormValues);
+            }
         });
 
-        // 폼 제출 시에도 저장
-        customPromptInput.addEventListener('change', saveCustomPrompt);
+        // 라디오 버튼들에 change 이벤트 바인딩
+        modeRadios.forEach(radio => {
+            radio.addEventListener('change', () => {
+                saveFormValues();
+                toggleTranslationField();
+            });
+        });
+
+        // 커스텀 프롬프트 자동 저장
+        if (customPromptInput) {
+            let saveTimeout;
+            customPromptInput.addEventListener('input', () => {
+                clearTimeout(saveTimeout);
+                saveTimeout = setTimeout(() => {
+                    setStorageValue('custom_prompt', customPromptInput.value);
+                    updateClearButtonVisibility();
+                }, 500);
+            });
+            customPromptInput.addEventListener('change', () => {
+                setStorageValue('custom_prompt', customPromptInput.value);
+                updateClearButtonVisibility();
+            });
+        }
 
         // 지우기 버튼 이벤트
         if (clearPromptBtn) {
             clearPromptBtn.addEventListener('click', clearCustomPrompt);
         }
+
+        // 폼 제출 시 모든 값 저장
+        form?.addEventListener('submit', saveFormValues);
     }
 
-    modeRadios.forEach(radio => {
-        radio.addEventListener('change', toggleTranslationField);
-    });
-    toggleTranslationField();
     bindDropZone();
     bindFileSelect();
-    bindCustomPromptStorage();
+    bindFormValueStorage();
 
     form?.addEventListener('submit', submitForm);
 })();

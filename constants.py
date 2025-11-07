@@ -1,7 +1,7 @@
 import os
 
 # 기본 모델 설정
-DEFAULT_MODEL = "gemini-2.5-flash"
+DEFAULT_MODEL = "gemini-flash-latest"
 
 # 컨텍스트 유지 설정
 DEFAULT_CONTEXT_KEEP_RECENT = 50
