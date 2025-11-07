@@ -89,7 +89,7 @@
                                     <div id="translation-language" class="hidden md:flex md:flex-col">
                                         <label class="flex flex-col gap-2">
                                             <span class="text-sm font-medium text-slate-700">번역 대상 언어</span>
-                                            <input type="text" name="target_language" placeholder="예: 영어, 일본어" class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20">
+                                            <input type="text" name="target_language" placeholder="예: 영어, 일본어" value="한국어" class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20">
                                         </label>
                                     </div>
                                 </div>
@@ -100,8 +100,8 @@
                                 <div class="grid gap-2">
                                     <label class="flex flex-col gap-2">
                                         <span class="text-sm font-medium text-slate-700">청크 길이 (분)</span>
-                                        <input type="number" name="chunk_minutes" value="10" min="1" step="1" class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20">
-                                        <span class="text-xs text-slate-400">기본값은 10분이며, 분 단위로 설정할 수 있습니다.</span>
+                                        <input type="number" name="chunk_minutes" value="2" min="1" max="5" step="1" class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20">
+                                        <span class="text-xs text-slate-400">1~5분(최대) 단위로 설정할 수 있습니다.</span>
                                     </label>
                                 </div>
                             </section>

@@ -85,6 +85,49 @@ def _write_srt(entries: List[Dict[str, Any]], dest: str) -> str:
     return dest
 
 
+def _build_transcript_context(entries: List[Dict[str, Any]], limit: int = 20) -> str:
+    if not entries:
+        return ""
+    recent = entries[-limit:]
+    lines = ["Previous transcript context (latest entries):"]
+    for item in recent:
+        try:
+            start = item.get("start", 0.0)
+            text = (item.get("text") or "").strip()
+            if not text:
+                continue
+            start_ts = _format_timestamp(start)
+            if len(text) > 240:
+                text = text[:237].rstrip() + "..."
+            lines.append(f"- [{start_ts}] {text}")
+        except Exception:
+            continue
+    if len(lines) == 1:
+        return ""
+    return "\n".join(lines)
+
+
+def _build_speech_windows(segment: SegmentState, max_chunk_seconds: float = 10.0) -> List[Dict[str, float]]:
+    if not segment.speech_segments:
+        return []
+    windows: List[Dict[str, float]] = []
+    clip_start = segment.start_time
+    for speech in segment.speech_segments:
+        try:
+            abs_start = max(0.0, float(speech.get("start", 0.0)))
+            abs_end = max(abs_start + 0.05, float(speech.get("end", abs_start + 0.1)))
+        except (TypeError, ValueError):
+            continue
+        rel_start = max(0.0, abs_start - clip_start)
+        rel_end = max(rel_start + 0.05, abs_end - clip_start)
+        current = rel_start
+        while current < rel_end - 1e-6:
+            chunk_end = min(rel_end, current + max_chunk_seconds)
+            windows.append({"start": round(current, 3), "end": round(chunk_end, 3)})
+            current = chunk_end
+    return windows
+
+
 def _download_youtube_video(url: str, output_dir: str) -> str:
     _ensure_dir(output_dir)
     ydl_opts = {
@@ -283,29 +326,15 @@ def _transcribe_segment(client: GeminiClient, segment: SegmentState,
         instruction_lines.append(
             f"Translate the utterances into {target_language} while keeping speaker intent."
         )
+        instruction_lines.append(
+            f"The `text` field must contain only the final {target_language} sentence (no source text, no language labels, no mixed output)."
+        )
     else:
         instruction_lines.append("Keep the language exactly as spoken in the clip.")
-    if segment.speech_segments:
-        try:
-            raw_context = json.dumps(segment.speech_segments, ensure_ascii=False)
-            instruction_lines.append("speech_segments (absolute seconds from the original video):")
-            instruction_lines.append(raw_context)
-        except (TypeError, ValueError):
-            pass
-        relative_segments: List[Dict[str, float]] = []
-        for speech in segment.speech_segments:
-            try:
-                rel_start = max(0.0, float(speech.get("start", 0.0)) - segment.start_time)
-                rel_end = max(rel_start, float(speech.get("end", rel_start)) - segment.start_time)
-                relative_segments.append({"start": rel_start, "end": rel_end})
-            except (TypeError, ValueError):
-                continue
-        if relative_segments:
-            try:
-                instruction_lines.append("speech_segments rebased to this clip (seconds from clip start):")
-                instruction_lines.append(json.dumps(relative_segments, ensure_ascii=False))
-            except (TypeError, ValueError):
-                pass
+    speech_windows = _build_speech_windows(segment)
+    if speech_windows:
+        instruction_lines.append("Use the following speech windows (seconds from this clip's start, each <=10s) as guidance. You may merge or split them further for readability, but never allow a subtitle entry to exceed 10 seconds:")
+        instruction_lines.append(json.dumps(speech_windows, ensure_ascii=False))
     instruction_lines.append("Do not include any additional fields.")
     prompt = "\n".join(instruction_lines)
 
@@ -411,10 +440,21 @@ def _run_job(job: SubtitleJob, youtube_url: Optional[str], uploaded_path: Option
         job.append_log(f"{job.total_segments}개의 세그먼트가 생성되었습니다.")
 
         _update_job(job, phase="transcribe", message="Gemini로 전사를 시작합니다.")
-        client = GeminiClient(model=DEFAULT_MODEL)
+        client = GeminiClient(model=DEFAULT_MODEL, thinking_budget=-1)
         client.start_chat()
+        last_segment_start_at: Optional[float] = None
 
         for segment in job.segments:
+            if last_segment_start_at is not None:
+                elapsed = max(0.0, time.time() - last_segment_start_at)
+                if elapsed < 60.0:
+                    wait_seconds = 60.0 - elapsed
+                    job.append_log(f"쿼터 보호를 위해 {wait_seconds:.1f}초 대기 후 다음 세그먼트를 처리합니다.")
+                    time.sleep(wait_seconds)
+                    time.sleep(wait_seconds)
+
+            last_segment_start_at = time.time()
+
             segment.status = "processing"
             segment.message = "전사 중..."
             job.append_log(f"{segment.index}번 세그먼트 전사 중...")
@@ -430,6 +470,12 @@ def _run_job(job: SubtitleJob, youtube_url: Optional[str], uploaded_path: Option
 
             job.processed_segments += 1
             job.updated_at = _now()
+            context_text = _build_transcript_context(job.transcript_entries)
+            if context_text:
+                history_seed = [{'role': 'user', 'parts': [{'text': context_text}]}]
+            else:
+                history_seed = []
+            client.start_chat(history=history_seed, suppress_log=True, reset_usage=False)
 
         combined = sorted(job.transcript_entries, key=lambda item: item["start"])
         if not combined:

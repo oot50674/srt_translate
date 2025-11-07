@@ -7,7 +7,7 @@ import os
 import subprocess
 import tempfile
 from dataclasses import asdict, dataclass, field
-from typing import Dict, Iterable, List, Sequence
+from typing import Dict, Iterable, List, Sequence, Optional
 
 import torch
 
@@ -351,53 +351,3 @@ def main() -> None:
             f"[{segment.index:02d}] {segment.file_path} "
             f"({segment.start_time:.3f}s ~ {segment.end_time:.3f}s)"
         )
-
-
-if __name__ == "__main__":
-    # 테스트 코드: 지정된 비디오 파일을 3분 간격으로 분할
-
-    # 테스트 설정
-    input_video_path = r"D:\code-project\srt_translate\download_video\Feet..mp4"
-    minutes_per_segment = 3.0  # 3분 간격으로 분할
-
-    # 출력 디렉토리 설정
-    output_dir = r"D:\code-project\srt_translate\download_video\split"
-    os.makedirs(output_dir, exist_ok=True)
-
-    print(f"테스트 시작: {input_video_path}")
-    print(f"분할 간격: {minutes_per_segment}분")
-    print(f"출력 디렉토리: {output_dir}")
-
-    try:
-        # 비디오 분할 실행
-        metadata = split_video_by_minutes(
-            input_path=input_video_path,
-            output_dir=output_dir,
-            minutes_per_segment=minutes_per_segment,
-        )
-
-        print(f"\n분할 완료! 생성된 조각 수: {len(metadata)}")
-
-        # 결과 출력
-        for segment in metadata:
-            print(
-                f"[{segment.index:02d}] {os.path.basename(segment.file_path)} "
-                f"({segment.start_time:.1f}s ~ {segment.end_time:.1f}s, "
-                f"길이: {segment.duration:.1f}s)"
-            )
-            if segment.speech_segments:
-                print(f"    발화 구간: {len(segment.speech_segments)}개")
-
-        # storage에 저장된 내용 로그로 출력
-        print("\n[storage에 저장된 내용 확인]")
-        from storage import get_value as storage_get_value
-        storage_key = DEFAULT_STORAGE_KEY
-        storage_content = storage_get_value(storage_key, default=[])
-        print(f"storage_key = '{storage_key}'에 저장된 값 {len(storage_content)}개:")
-        for i, item in enumerate(storage_content):
-            print(f"  [{i}] {item}")
-
-    except Exception as e:
-        print(f"오류 발생: {e}")
-        import traceback
-        traceback.print_exc()
