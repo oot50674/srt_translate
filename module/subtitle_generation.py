@@ -8,11 +8,11 @@ import os
 import re
 import threading
 import time
+import unicodedata
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
-from werkzeug.utils import secure_filename
 from yt_dlp import YoutubeDL
 
 from constants import BASE_DIR, DEFAULT_MODEL
@@ -76,6 +76,30 @@ def _truncate_text(value: str, limit: int = 240) -> str:
     if not text or len(text) <= limit:
         return text
     return text[: max(0, limit - 3)].rstrip() + "..."
+
+
+_INVALID_FILENAME_CHARS = set('<>:"/\\|?*')
+
+
+def _sanitize_filename_preserve_unicode(original: str, fallback: str) -> str:
+    """업로드된 파일명에서 위험 문자를 제거하면서 한글 등 유니코드 문자를 보존합니다."""
+    name = os.path.basename(original or "").strip()
+    if not name:
+        return fallback
+
+    name = unicodedata.normalize("NFC", name)
+    sanitized_chars = []
+    for ch in name:
+        if ch in _INVALID_FILENAME_CHARS or ord(ch) < 32:
+            sanitized_chars.append("_")
+        else:
+            sanitized_chars.append(ch)
+    sanitized = "".join(sanitized_chars).strip()
+    sanitized = sanitized.lstrip(".")
+    if not sanitized:
+        return fallback
+    # 윈도우 파일 시스템 최대 길이 고려
+    return sanitized[:255]
 
 
 _RETRY_DELAY_PATTERN = re.compile(r"retryDelay['\"]?\s*:\s*'?(?P<seconds>\d+(?:\.\d+)?)s", re.IGNORECASE)
@@ -695,7 +719,11 @@ def _update_job(job: SubtitleJob, *, status: Optional[str] = None, phase: Option
 
 
 def _save_uploaded_file(uploaded_file: "FileStorage", dest_dir: str) -> str:
-    filename = secure_filename(uploaded_file.filename or "upload.mp4") or f"upload_{uuid.uuid4().hex}.mp4"
+    original_name = uploaded_file.filename or ""
+    _, ext = os.path.splitext(original_name)
+    default_ext = ext if ext else ".bin"
+    fallback_name = f"upload_{uuid.uuid4().hex}{default_ext}"
+    filename = _sanitize_filename_preserve_unicode(original_name, fallback_name)
     _ensure_dir(dest_dir)
     dest = os.path.join(dest_dir, filename)
     uploaded_file.save(dest)

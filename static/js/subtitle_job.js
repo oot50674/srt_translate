@@ -135,11 +135,11 @@
         logList.innerHTML = logs.slice().reverse().map(entry => {
             const timeText = formatTime(entry.timestamp);
             const levelClass = entry.level === 'error' ? 'text-red-600' : 'text-slate-600';
-            return `
-                <li class="flex items-center gap-2">
-                    <span class="text-xs text-slate-400 w-24">${timeText}</span>
-                    <span class="text-xs uppercase font-semibold ${levelClass}">${entry.level}</span>
-                    <span class="flex-1 text-slate-700">${entry.message}</span>
+        return `
+                <li class="flex items-start gap-2">
+                    <span class="text-xs text-slate-400 w-24 flex-shrink-0">${timeText}</span>
+                    <span class="text-xs uppercase font-semibold ${levelClass} flex-shrink-0">${entry.level}</span>
+                    <span class="flex-1 min-w-0 text-slate-700 break-all">${entry.message}</span>
                 </li>
             `;
         }).join('');
