@@ -15,7 +15,7 @@
 <body class="bg-slate-100" style='font-family: "Work Sans", "Noto Sans", sans-serif;' data-missing-api-key="{{ 'true' if missing_api_key else 'false' }}">
     <div class="relative flex min-h-screen size-full flex-col">
         <div class="layout-container flex h-full grow flex-col">
-            <header class="flex items-center justify-between whitespace-nowrap border-b border-solid border-b-slate-200 px-10 py-4 bg-white shadow-sm">
+            <header id="page-header" class="flex items-center justify-between whitespace-nowrap border-b border-solid border-b-slate-200 px-10 py-4 bg-white shadow-sm">
                 <div class="flex items-center gap-6">
                     <div class="flex items-center gap-3 text-slate-900">
                         <div class="size-7 text-[#0c77f2]">
@@ -34,7 +34,7 @@
                     <!-- 필요 시 상단 우측 액션 버튼 영역 -->
                 </div>
             </header>
-            <main class="px-4 md:px-10 lg:px-20 py-10">
+            <main id="page-main" class="px-4 md:px-10 lg:px-20 py-10">
                 <div class="max-w-3xl mx-auto">
                     <div class="flex flex-col w-full py-8 bg-white shadow-xl rounded-xl px-6 md:px-10">
                         <div class="mb-8">
@@ -48,7 +48,7 @@
                         </div>
                         <div id="subtitle-generate-alert" class="hidden rounded-lg border px-4 py-3 text-sm mb-6"></div>
                         <form id="subtitle-generate-form" class="space-y-8" method="post" enctype="multipart/form-data">
-                            <section class="space-y-4">
+                            <section id="video-source-section" class="space-y-4">
                                 <h2 class="text-lg font-semibold text-slate-900">영상 소스</h2>
                                 <div class="grid gap-4">
                                     <label class="flex flex-col gap-2">
@@ -62,19 +62,20 @@
                                     </div>
                                     <div class="flex flex-col">
                                         <h3 class="text-sm font-medium text-slate-700">파일 업로드</h3>
-                                        <p class="text-xs text-slate-500 mt-1 mb-2">영상 파일과 SRT 자막 파일을 함께 업로드할 수 있습니다. SRT 파일을 함께 업로드하면 VAD/Whisper 처리를 건너뛰고 자막의 타임스탬프를 기준으로 세그먼트를 나눕니다.</p>
+                                        <p class="text-xs text-slate-500 mt-1 mb-2">영상 파일과 SRT 자막 파일을 함께 업로드할 수 있습니다. 필요하다면 별도의 음성 파일을 추가해 영상 오디오 트랙을 교체할 수 있습니다.</p>
                                         <div id="file-drop-zone" class="flex flex-col items-center justify-center gap-4 rounded-lg border-2 border-dashed border-slate-300 px-6 py-8 text-center bg-slate-50 hover:border-slate-400 transition-colors">
                                             <div class="flex items-center gap-2">
                                                 <span class="material-icons text-4xl text-slate-400">cloud_upload</span>
                                             </div>
                                             <div>
                                                 <p class="text-slate-700 text-base font-medium leading-tight">여기에 파일을 끌어다 놓으세요</p>
-                                                <p class="text-slate-500 text-sm font-normal leading-normal mt-1">영상 파일 (필수) + SRT 파일 (선택)</p>
+                                                <p class="text-slate-500 text-sm font-normal leading-normal mt-1">영상 (필수) + SRT/음성 파일 (선택)</p>
                                             </div>
                                             <p class="text-slate-500 text-sm font-normal leading-normal">또는</p>
                                             <input type="file" name="video_file" id="video-file" accept="video/*" class="hidden" />
                                             <input type="file" name="srt_file" id="srt-file" accept=".srt" class="hidden" />
-                                            <input type="file" id="file-input" accept="video/*,.srt" multiple class="hidden" />
+                                            <input type="file" name="voice_file" id="voice-file" accept="audio/*" class="hidden" />
+                                            <input type="file" id="file-input" accept="video/*,audio/*,.srt" multiple class="hidden" />
                                             <button type="button" id="file-select-btn" class="flex items-center gap-2 min-w-[84px] max-w-[480px] cursor-pointer justify-center overflow-hidden rounded-md h-10 px-4 bg-slate-200 text-slate-700 text-sm font-semibold leading-normal tracking-[0.015em] hover:bg-slate-300 transition-colors">
                                                 <span class="material-icons text-lg">folder_open</span>
                                                 <span class="truncate">파일 선택</span>
@@ -85,7 +86,7 @@
                                 </div>
                             </section>
 
-                            <section class="space-y-4">
+                            <section id="transcription-settings-section" class="space-y-4">
                                 <h2 class="text-lg font-semibold text-slate-900">전사 및 번역 설정</h2>
                                 <div class="space-y-3">
                                     <label class="flex items-center gap-3">
@@ -105,7 +106,7 @@
                                 </div>
                             </section>
 
-                            <section class="space-y-4">
+                            <section id="chunk-settings-section" class="space-y-4">
                                 <h2 class="text-lg font-semibold text-slate-900">청크 설정</h2>
                                 <div class="grid gap-2">
                                     <label class="flex flex-col gap-2">
@@ -116,7 +117,7 @@
                                 </div>
                             </section>
 
-                            <section class="space-y-4">
+                            <section id="additional-settings-section" class="space-y-4">
                                 <div class="flex items-center justify-between">
                                     <h2 class="text-lg font-semibold text-slate-900">추가 설정</h2>
                                     <button type="button" id="clear-custom-prompt-btn" class="text-xs text-slate-500 hover:text-slate-700 underline hidden">

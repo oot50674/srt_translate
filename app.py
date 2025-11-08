@@ -168,17 +168,19 @@ def api_create_subtitle_generation_job():
     model_name = (request.form.get('model') or '').strip() or DEFAULT_MODEL
     video_file = request.files.get('video_file')
     srt_file = request.files.get('srt_file')
+    voice_file = request.files.get('voice_file')
     try:
-            job = start_subtitle_job(
-                youtube_url=youtube_url or None,
-                uploaded_file=video_file if video_file and video_file.filename else None,
-                srt_file=srt_file if srt_file and srt_file.filename else None,
-                chunk_minutes=chunk_minutes,
-                mode=transcription_mode,
-                target_language=target_language or None,
-                custom_prompt=custom_prompt or None,
-                model_name=model_name,
-            )
+        job = start_subtitle_job(
+            youtube_url=youtube_url or None,
+            uploaded_file=video_file if video_file and video_file.filename else None,
+            voice_file=voice_file if voice_file and voice_file.filename else None,
+            srt_file=srt_file if srt_file and srt_file.filename else None,
+            chunk_minutes=chunk_minutes,
+            mode=transcription_mode,
+            target_language=target_language or None,
+            custom_prompt=custom_prompt or None,
+            model_name=model_name,
+        )
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400
     except Exception as exc:  # pragma: no cover - defensive

@@ -10,6 +10,7 @@
     const dropZone = document.getElementById('file-drop-zone');
     const videoFileInput = document.getElementById('video-file');
     const srtFileInput = document.getElementById('srt-file');
+    const voiceFileInput = document.getElementById('voice-file');
     const fileInput = document.getElementById('file-input');
     const selectBtn = document.getElementById('file-select-btn');
     const fileList = document.getElementById('file-list');
@@ -72,15 +73,22 @@
         return filename.toLowerCase().endsWith('.srt');
     }
 
+    function isAudioFile(filename) {
+        const audioExts = ['.wav', '.mp3', '.m4a', '.aac', '.flac', '.ogg', '.wma'];
+        return audioExts.some(ext => filename.toLowerCase().endsWith(ext));
+    }
+
     function processFiles(files) {
         if (!files || files.length === 0) return;
 
         // 기존에 업로드된 파일 확인
         let existingVideoFile = videoFileInput?.files?.[0] || null;
         let existingSrtFile = srtFileInput?.files?.[0] || null;
+        let existingVoiceFile = voiceFileInput?.files?.[0] || null;
 
         let videoFile = existingVideoFile;
         let srtFile = existingSrtFile;
+        let voiceFile = existingVoiceFile;
 
         // 새로 추가된 파일을 타입별로 분류
         Array.from(files).forEach(file => {
@@ -88,6 +96,8 @@
                 videoFile = file;
             } else if (isSrtFile(file.name)) {
                 srtFile = file;
+            } else if (isAudioFile(file.name)) {
+                voiceFile = file;
             }
         });
 
@@ -104,14 +114,20 @@
             srtFileInput.files = dt.files;
         }
 
+        if (voiceFile && voiceFileInput) {
+            const dt = new DataTransfer();
+            dt.items.add(voiceFile);
+            voiceFileInput.files = dt.files;
+        }
+
         // 파일 목록 UI 업데이트
-        updateFileList(videoFile, srtFile);
+        updateFileList(videoFile, srtFile, voiceFile);
     }
 
-    function updateFileList(videoFile, srtFile) {
+    function updateFileList(videoFile, srtFile, voiceFile) {
         if (!fileList) return;
 
-        if (!videoFile && !srtFile) {
+        if (!videoFile && !srtFile && !voiceFile) {
             fileList.classList.add('hidden');
             fileList.innerHTML = '';
             return;
@@ -134,7 +150,7 @@
 
             videoItem.querySelector('.remove-video-btn').addEventListener('click', () => {
                 videoFileInput.value = '';
-                updateFileList(null, srtFileInput.files?.[0] || null);
+                updateFileList(null, srtFileInput.files?.[0] || null, voiceFileInput?.files?.[0] || null);
             });
         }
 
@@ -152,7 +168,25 @@
 
             srtItem.querySelector('.remove-srt-btn').addEventListener('click', () => {
                 srtFileInput.value = '';
-                updateFileList(videoFileInput.files?.[0] || null, null);
+                updateFileList(videoFileInput?.files?.[0] || null, null, voiceFileInput?.files?.[0] || null);
+            });
+        }
+
+        if (voiceFile) {
+            const voiceItem = document.createElement('div');
+            voiceItem.className = 'flex items-center gap-2 px-3 py-2 bg-purple-50 border border-purple-200 rounded-md';
+            voiceItem.innerHTML = `
+                <span class="material-icons text-purple-600">graphic_eq</span>
+                <span class="flex-1 text-sm text-slate-700 truncate">${voiceFile.name}</span>
+                <button type="button" class="remove-voice-btn text-slate-400 hover:text-slate-600">
+                    <span class="material-icons text-lg">close</span>
+                </button>
+            `;
+            fileList.appendChild(voiceItem);
+
+            voiceItem.querySelector('.remove-voice-btn').addEventListener('click', () => {
+                voiceFileInput.value = '';
+                updateFileList(videoFileInput?.files?.[0] || null, srtFileInput?.files?.[0] || null, null);
             });
         }
     }

@@ -11,6 +11,7 @@ import threading
 import time
 import unicodedata
 import uuid
+import subprocess
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
@@ -621,6 +622,7 @@ class SubtitleJob:
     logs: List[Dict[str, Any]] = field(default_factory=list)
     failed_segments: List[int] = field(default_factory=list)
     stop_requested: bool = False
+    voice_override_path: Optional[str] = None
 
     def progress(self) -> float:
         if self.total_segments <= 0:
@@ -755,6 +757,42 @@ def _prepare_source_path(job: SubtitleJob, youtube_url: Optional[str],
     raise ValueError("영상 파일 또는 YouTube 링크가 필요합니다.")
 
 
+def _merge_video_with_voice_track(video_path: str, audio_path: str, output_dir: str) -> str:
+    if not os.path.isfile(video_path):
+        raise FileNotFoundError(f"영상 파일을 찾을 수 없습니다: {video_path}")
+    if not os.path.isfile(audio_path):
+        raise FileNotFoundError(f"음성 파일을 찾을 수 없습니다: {audio_path}")
+
+    ffmpeg_module.register_ffmpeg_path()
+    _ensure_dir(output_dir)
+    merged_path = os.path.join(output_dir, f"voice_overlay_{uuid.uuid4().hex}.mp4")
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        video_path,
+        "-i",
+        audio_path,
+        "-c:v",
+        "copy",
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-shortest",
+        merged_path,
+    ]
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except subprocess.CalledProcessError as exc:
+        stderr = exc.stderr.decode("utf-8", errors="ignore")
+        raise RuntimeError(f"음성 교체 작업 실패: {stderr.strip() or exc}") from exc
+    return merged_path
+
+
 def _create_segments(job: SubtitleJob, minutes_per_segment: float) -> List[SegmentMetadata]:
     storage_key = f"{DEFAULT_STORAGE_KEY}:{job.job_id}"
     return split_video_by_minutes(
@@ -769,6 +807,7 @@ def start_job(
     *,
     youtube_url: Optional[str],
     uploaded_file: Optional["FileStorage"],
+    voice_file: Optional["FileStorage"],
     srt_file: Optional["FileStorage"],
     chunk_minutes: float,
     mode: str,
@@ -793,10 +832,13 @@ def start_job(
     chunks_dir = _ensure_dir(os.path.join(output_dir, "segments"))
     uploaded_path: Optional[str] = None
     srt_path: Optional[str] = None
+    voice_path: Optional[str] = None
     if uploaded_file and uploaded_file.filename:
         uploaded_path = _save_uploaded_file(uploaded_file, os.path.join(output_dir, "source"))
     if srt_file and srt_file.filename:
         srt_path = _save_uploaded_file(srt_file, os.path.join(output_dir, "source"))
+    if voice_file and voice_file.filename:
+        voice_path = _save_uploaded_file(voice_file, os.path.join(output_dir, "source"))
     job = SubtitleJob(
         job_id=job_id,
         output_dir=output_dir,
@@ -807,6 +849,7 @@ def start_job(
         youtube_url=youtube_url,
         custom_prompt=custom_prompt,
         model_name=model_name,
+        voice_override_path=voice_path,
     )
     _reset_saved_history(job_id)
 
@@ -815,7 +858,7 @@ def start_job(
 
     thread = threading.Thread(
         target=_run_job,
-        args=(job, youtube_url, uploaded_path, srt_path),
+        args=(job, youtube_url, uploaded_path, srt_path, voice_path),
         daemon=True,
     )
     thread.start()
@@ -1006,11 +1049,30 @@ def _mark_segments_cancelled(job: SubtitleJob) -> None:
             segment.message = "사용자 요청으로 중지됨"
 
 
-def _run_job(job: SubtitleJob, youtube_url: Optional[str], uploaded_path: Optional[str], srt_path: Optional[str] = None) -> None:
+def _run_job(
+    job: SubtitleJob,
+    youtube_url: Optional[str],
+    uploaded_path: Optional[str],
+    srt_path: Optional[str] = None,
+    voice_path: Optional[str] = None,
+) -> None:
     try:
         _update_job(job, status="running", phase="source", message="영상 소스를 준비하는 중입니다.")
         job.source_path = _prepare_source_path(job, youtube_url, uploaded_path)
         job.append_log(f"소스 파일: {job.source_path}")
+
+        if voice_path:
+            job.append_log("업로드된 음성 파일로 영상 오디오를 교체합니다.")
+            try:
+                replaced_path = _merge_video_with_voice_track(
+                    job.source_path,
+                    voice_path,
+                    os.path.join(job.output_dir, "source"),
+                )
+                job.source_path = replaced_path
+                job.append_log("음성 교체가 완료되어 새 영상 파일을 사용합니다.")
+            except Exception as exc:
+                job.append_log(f"음성 교체 실패: {exc}. 원본 오디오로 계속 진행합니다.", level="warning")
 
         _update_job(job, phase="split", message="영상 분할을 시작합니다.")
         ffmpeg_module.register_ffmpeg_path()
