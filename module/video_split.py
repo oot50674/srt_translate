@@ -31,7 +31,6 @@ class SileroVAD:
         speech_pad_ms: int = 30,
         num_threads: int = 1,
     ) -> None:
-        os.environ["CUDA_VISIBLE_DEVICES"] = ""
         torch.set_num_threads(num_threads)
 
         self.sampling_rate = sampling_rate

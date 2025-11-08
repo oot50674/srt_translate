@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 SUBTITLE_JOB_ROOT = os.path.join(BASE_DIR, "generated_subtitles")
 os.makedirs(SUBTITLE_JOB_ROOT, exist_ok=True)
 _HISTORY_STORAGE_PREFIX = "subtitle_job_history:"
+_QUOTA_COOLDOWN_SECONDS = 10.0
 
 ENTRY_UPDATE_RESPONSE_SCHEMA: Dict[str, Any] = {
     "type": "object",
@@ -916,8 +917,8 @@ def _process_segment(
 ) -> float:
     if last_segment_start_at is not None:
         elapsed = max(0.0, time.time() - last_segment_start_at)
-        if elapsed < 60.0:
-            wait_seconds = 60.0 - elapsed
+        if elapsed < _QUOTA_COOLDOWN_SECONDS:
+            wait_seconds = _QUOTA_COOLDOWN_SECONDS - elapsed
             job.append_log(f"쿼터 보호를 위해 {wait_seconds:.1f}초 대기 후 다음 세그먼트를 처리합니다.")
             time.sleep(wait_seconds)
 

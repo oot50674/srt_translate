@@ -1,15 +1,18 @@
 """
 Whisper 음성 인식 유틸리티 모듈
 
-CPU 전용으로 Whisper tiny 모델을 사용하여 음성 파일을 텍스트로 변환합니다.
-진행 상황 표시 기능을 지원합니다.
+CUDA 지원 여부에 따라 GPU large-v3-turbo 또는 CPU tiny 모델을 사용하여
+음성 파일을 텍스트로 변환합니다. 진행 상황 표시 기능을 지원합니다.
 """
 
-import whisper
-import torch
 import os
-from typing import Optional, Dict, Any, Callable, List
 import time
+from typing import Any, Dict, List, Optional, Tuple
+
+try:  # whisper가 설치되지 않은 환경에서도 모듈 임포트가 가능하도록 처리
+    import whisper  # type: ignore
+except ImportError:  # pragma: no cover - 런타임 안내 목적
+    whisper = None  # type: ignore
 
 
 def _format_timestamp(seconds: float) -> str:
@@ -38,33 +41,87 @@ def _format_timestamp(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
 
 
+def _system_has_cuda_runtime() -> bool:
+    """
+    PyTorch CUDA 런타임 사용 가능 여부를 확인합니다.
+    GPU 지원 모델을 사용하려면 torch가 CUDA를 지원해야 하므로 torch 상태만 신뢰합니다.
+    """
+    try:
+        import torch  # type: ignore
+    except ImportError:
+        return False
+    try:
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
+
+
 class WhisperUtil:
     """
-    CPU 전용 Whisper 음성 인식 유틸리티 클래스
+    CUDA 사용 가능 시 GPU 대형 모델, 그렇지 않으면 CPU 경량 모델을 활용하는 유틸리티.
     """
 
     def __init__(self):
         """
-        WhisperUtil 초기화
-        CPU 전용으로 tiny 모델을 로드합니다.
+        WhisperUtil 초기화.
+        CUDA 사용 가능 시 GPU large-v3-turbo, 아니면 CPU tiny 모델을 로드합니다.
+        또한 전사(transcription)에 사용할 기본 파라미터를 설정합니다.
         """
-        self.device = "cpu"
+        self.device, self.model_name = self._decide_runtime_mode()
+        # 기본 전사 파라미터 (사용자 요청값)
+        # TODO: 필요 시 인스턴스 생성 시 외부에서 주입할 수 있도록 확장 가능
+        self.no_speech_threshold = 0.8
+        self.temperature = 0.6
+        self.compression_ratio_threshold = 0.6
         self.model = None
         self._load_model()
 
+    @staticmethod
+    def _decide_runtime_mode() -> Tuple[str, str]:
+        if _system_has_cuda_runtime():
+            return "cuda", "large-v3-turbo"
+        return "cpu", "tiny"
+
     def _load_model(self):
         """
-        CPU 전용 tiny 모델을 로드합니다.
+        환경에 맞는 Whisper 모델을 로드합니다.
         """
+        mode_label = (
+            "GPU Whisper large-v3-turbo 모델"
+            if self.device == "cuda"
+            else "CPU Whisper tiny 모델"
+        )
         try:
-            print("CPU 전용 Whisper tiny 모델 로딩 중...")
-            self.model = whisper.load_model("tiny", device=self.device)
-            print("모델 로딩 완료 (CPU 전용)")
+            if whisper is None:
+                raise ImportError("openai-whisper 패키지가 설치되어 있지 않습니다.")
+            print(f"{mode_label} 로딩 중...")
+            self.model = whisper.load_model(self.model_name, device=self.device)
+            print("모델 로딩 완료")
         except Exception as e:
+            if self.device == "cuda" and whisper is not None:
+                print(f"GPU 로딩 실패({e}). CPU tiny 모델로 폴백합니다.")
+                self.device = "cpu"
+                self.model_name = "tiny"
+                try:
+                    print("CPU Whisper tiny 모델 로딩 중...")
+                    self.model = whisper.load_model(self.model_name, device=self.device)
+                    print("모델 로딩 완료 (CPU 폴백)")
+                    return
+                except Exception as fallback_exc:
+                    print(f"CPU 폴백 로딩 실패: {fallback_exc}")
+                    raise
             print(f"모델 로딩 실패: {e}")
             raise
 
-    def transcribe_audio(self, audio_path: str, language: Optional[str] = None, show_progress: bool = True) -> Dict[str, Any]:
+    def transcribe_audio(
+        self,
+        audio_path: str,
+        language: Optional[str] = None,
+        show_progress: bool = True,
+        no_speech_threshold: Optional[float] = None,
+        temperature: Optional[float] = None,
+        compression_ratio_threshold: Optional[float] = None,
+    ) -> Dict[str, Any]:
         """
         음성/비디오 파일을 텍스트로 변환합니다.
 
@@ -101,11 +158,27 @@ class WhisperUtil:
 
             start_time = time.time()
 
-            # 변환 실행
+            # 전사 파라미터: 메서드 호출 시 전달된 값이 우선, 없으면 인스턴스 기본값 사용
+            no_speech_threshold = self.no_speech_threshold if no_speech_threshold is None else no_speech_threshold
+            temperature = self.temperature if temperature is None else temperature
+            compression_ratio_threshold = (
+                self.compression_ratio_threshold
+                if compression_ratio_threshold is None
+                else compression_ratio_threshold
+            )
+            # whisper.transcribe에 전달할 인자 구성
+            transcribe_kwargs: Dict[str, Any] = {}
             if language:
-                result = self.model.transcribe(audio_path, language=language, verbose=verbose)
-            else:
-                result = self.model.transcribe(audio_path, verbose=verbose)
+                transcribe_kwargs["language"] = language
+            # no_speech_threshold, compression_ratio_threshold, chunk_length_s는 float
+            transcribe_kwargs["no_speech_threshold"] = no_speech_threshold
+            transcribe_kwargs["compression_ratio_threshold"] = compression_ratio_threshold
+            # temperature는 float 또는 리스트로 허용하므로 단일 값이면 리스트로 감싸는 것이 안전
+            transcribe_kwargs["temperature"] = [temperature] if isinstance(temperature, (int, float)) else temperature
+            transcribe_kwargs["verbose"] = verbose
+
+            # 변환 실행
+            result = self.model.transcribe(audio_path, **transcribe_kwargs)
 
             end_time = time.time()
             duration = end_time - start_time
