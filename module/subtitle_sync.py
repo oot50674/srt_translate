@@ -14,6 +14,9 @@ logger = logging.getLogger(__name__)
 @dataclass
 class SyncConfig:
     """자막 싱크 보정 설정"""
+    # 청크 모드
+    chunk_mode: str = "grouped"  # "grouped" or "individual"
+
     # 청크 묶기 설정
     gap_threshold_ms: int = 200
 
@@ -137,12 +140,13 @@ def parse_srt_entries(subtitles: List[Dict]) -> List[SubtitleEntry]:
     return entries
 
 
-def build_chunks(entries: List[SubtitleEntry], gap_threshold_ms: int) -> List[Chunk]:
+def build_chunks(entries: List[SubtitleEntry], chunk_mode: str, gap_threshold_ms: int) -> List[Chunk]:
     """자막 엔트리들을 청크로 묶기
 
     Args:
         entries: 자막 엔트리 리스트
-        gap_threshold_ms: 청크를 나누는 간격 임계값 (밀리초)
+        chunk_mode: 청크 모드 ("grouped" or "individual")
+        gap_threshold_ms: 청크를 나누는 간격 임계값 (밀리초, grouped 모드에서만 사용)
 
     Returns:
         청크 리스트
@@ -151,6 +155,20 @@ def build_chunks(entries: List[SubtitleEntry], gap_threshold_ms: int) -> List[Ch
         return []
 
     chunks = []
+
+    if chunk_mode == "individual":
+        # 개별 모드: 각 엔트리를 독립적인 청크로 처리
+        for entry in entries:
+            chunk = Chunk(
+                entries=[entry],
+                start_ms=entry.start_ms,
+                end_ms=entry.end_ms
+            )
+            chunks.append(chunk)
+        logger.info(f"개별 모드: {len(entries)}개 엔트리를 {len(chunks)}개 청크로 분리")
+        return chunks
+
+    # grouped 모드: 이어진 자막들을 하나의 청크로 묶기
     current_chunk_entries = [entries[0]]
 
     for i in range(1, len(entries)):
@@ -182,7 +200,7 @@ def build_chunks(entries: List[SubtitleEntry], gap_threshold_ms: int) -> List[Ch
         )
         chunks.append(chunk)
 
-    logger.info(f"총 {len(entries)}개 엔트리를 {len(chunks)}개 청크로 묶음")
+    logger.info(f"그룹 모드: 총 {len(entries)}개 엔트리를 {len(chunks)}개 청크로 묶음")
     return chunks
 
 
@@ -543,7 +561,7 @@ def sync_subtitles(
         return subtitles, {'status': 'no_segments'}
 
     # 3. 청크 구성
-    chunks = build_chunks(entries, config.gap_threshold_ms)
+    chunks = build_chunks(entries, config.chunk_mode, config.gap_threshold_ms)
 
     # 4. 각 청크의 경계 보정
     corrected_entries = []

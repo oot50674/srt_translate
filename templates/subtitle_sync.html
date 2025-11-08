@@ -44,6 +44,27 @@
                             <p class="mt-2 text-sm text-slate-600">Silero VAD를 활용하여 자막 타이밍을 음성 구간에 맞춰 자동으로 보정합니다.</p>
                         </div>
 
+                        <!-- 청크 모드 선택 -->
+                        <section id="chunk-mode-section" class="space-y-4 mb-8">
+                            <h2 class="text-lg font-semibold text-slate-900">보정 모드</h2>
+                            <div class="space-y-3">
+                                <label class="flex items-start gap-3 cursor-pointer">
+                                    <input type="radio" name="chunk_mode" value="grouped" class="mt-1 h-4 w-4 text-[#0c77f2] focus:ring-[#0c77f2]" checked>
+                                    <div>
+                                        <span class="text-sm font-medium text-slate-900">그룹 모드 (권장)</span>
+                                        <p class="text-xs text-slate-500 mt-1">이어진 자막들을 하나의 청크로 묶어서 보정합니다. 대화 흐름이 끊기지 않도록 전체적인 타이밍을 조정합니다.</p>
+                                    </div>
+                                </label>
+                                <label class="flex items-start gap-3 cursor-pointer">
+                                    <input type="radio" name="chunk_mode" value="individual" class="mt-1 h-4 w-4 text-[#0c77f2] focus:ring-[#0c77f2]">
+                                    <div>
+                                        <span class="text-sm font-medium text-slate-900">개별 모드</span>
+                                        <p class="text-xs text-slate-500 mt-1">각 자막 엔트리를 독립적으로 보정합니다. 자막 간 간격이 크거나 독립적인 문장일 때 유용합니다.</p>
+                                    </div>
+                                </label>
+                            </div>
+                        </section>
+
                         <!-- 파일 업로드 섹션 -->
                         <section id="file-upload-section" class="space-y-4 mb-8">
                             <h2 class="text-lg font-semibold text-slate-900">파일 업로드</h2>
@@ -128,11 +149,11 @@
                                     <div>
                                         <h3 class="text-base font-semibold text-slate-900 mb-3">경계 보정 설정</h3>
                                         <div class="grid gap-4">
-                                            <label class="flex flex-col gap-2">
+                                            <label class="flex flex-col gap-2" id="gap-threshold-container">
                                                 <span class="text-sm font-medium text-slate-700">청크 간격 임계값 (ms)</span>
                                                 <input type="number" id="gap-threshold" value="200" step="50"
                                                     class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20" />
-                                                <span class="text-xs text-slate-400">자막을 하나의 청크로 묶을 최대 간격</span>
+                                                <span class="text-xs text-slate-400">자막을 하나의 청크로 묶을 최대 간격 (그룹 모드에서만 사용)</span>
                                             </label>
                                             <label class="flex flex-col gap-2">
                                                 <span class="text-sm font-medium text-slate-700">탐색 범위 - 시작 뒤 (ms)</span>
@@ -171,7 +192,7 @@
                         <div id="progress-section" class="hidden mb-6">
                             <div class="rounded-lg border border-blue-300 bg-blue-50 px-4 py-3">
                                 <div class="flex items-center gap-3 mb-2">
-                                    <div class="animate-spin">
+                                    <div class="animate-spin flex items-center justify-center">
                                         <span class="material-icons text-[#0c77f2]">refresh</span>
                                     </div>
                                     <span id="progress-text" class="text-sm text-slate-900 font-medium">처리 중...</span>

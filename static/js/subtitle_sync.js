@@ -28,11 +28,13 @@ $(document).ready(function () {
     const $statCorrections = $('#stat-corrections');
 
     // 설정 입력 요소
+    const $chunkMode = $('input[name="chunk_mode"]');
     const $vadThreshold = $('#vad-threshold');
     const $minSpeechDuration = $('#min-speech-duration');
     const $minSilenceDuration = $('#min-silence-duration');
     const $speechPad = $('#speech-pad');
     const $gapThreshold = $('#gap-threshold');
+    const $gapThresholdContainer = $('#gap-threshold-container');
     const $lookbackStart = $('#lookback-start');
     const $lookaheadStart = $('#lookahead-start');
     const $pad = $('#pad');
@@ -90,6 +92,7 @@ $(document).ready(function () {
      */
     function collectConfig() {
         return {
+            chunk_mode: $('input[name="chunk_mode"]:checked').val() || 'grouped',
             vad_threshold: parseFloat($vadThreshold.val()) || 0.55,
             vad_min_speech_duration_ms: parseInt($minSpeechDuration.val()) || 200,
             vad_min_silence_duration_ms: parseInt($minSilenceDuration.val()) || 250,
@@ -99,6 +102,23 @@ $(document).ready(function () {
             lookahead_start_ms: parseInt($lookaheadStart.val()) || 400,
             pad_ms: parseInt($pad.val()) || 80
         };
+    }
+
+    /**
+     * 청크 모드에 따라 UI 업데이트
+     */
+    function updateChunkModeUI() {
+        const chunkMode = $('input[name="chunk_mode"]:checked').val();
+
+        if (chunkMode === 'individual') {
+            // 개별 모드: 청크 간격 임계값 비활성화
+            $gapThresholdContainer.addClass('opacity-50');
+            $gapThreshold.prop('disabled', true);
+        } else {
+            // 그룹 모드: 청크 간격 임계값 활성화
+            $gapThresholdContainer.removeClass('opacity-50');
+            $gapThreshold.prop('disabled', false);
+        }
     }
 
     /**
@@ -299,6 +319,12 @@ $(document).ready(function () {
 
     setupDragAndDrop($srtFile, $srtFileBtn);
     setupDragAndDrop($audioFile, $audioFileBtn);
+
+    // 청크 모드 변경 시 UI 업데이트
+    $chunkMode.on('change', updateChunkModeUI);
+
+    // 초기 UI 상태 설정
+    updateChunkModeUI();
 
     console.log('자막 보정 싱크 페이지 초기화 완료');
 });
