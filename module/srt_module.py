@@ -47,9 +47,28 @@ def read_srt(file_path: str) -> List[Subtitle]:
     """
     logger.info("Loading SRT file: %s", file_path)
 
-    with open(file_path, "r", encoding="utf-8-sig") as f:
-        content = f.read()
+    # 안전한 인코딩 처리: 여러 인코딩을 시도해 한글 깨짐을 방지합니다.
+    # 우선 바이너리로 읽은 뒤 여러 디코딩을 시도해 성공한 결과를 사용합니다.
+    tried_encodings = []
+    with open(file_path, "rb") as bf:
+        raw = bf.read()
 
+    for enc in ("utf-8-sig", "utf-8", "cp949", "euc-kr", "iso-8859-1"):
+        try:
+            content = raw.decode(enc)
+            logger.info("Decoded SRT using encoding=%s for file %s", enc, file_path)
+            return _parse_srt_content(content)
+        except Exception:
+            tried_encodings.append(enc)
+            continue
+
+    # 모든 디코딩 실패시 마지막으로 latin-1로 강제 디코드하고 파싱 시도
+    logger.warning(
+        "모든 시도한 인코딩(%s)에서 디코딩 실패: %s — latin-1로 강제 디코딩 시도",
+        tried_encodings,
+        file_path,
+    )
+    content = raw.decode("iso-8859-1", errors="replace")
     return _parse_srt_content(content)
 
 
