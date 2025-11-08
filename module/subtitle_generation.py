@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
@@ -18,6 +19,7 @@ from yt_dlp import YoutubeDL
 from constants import BASE_DIR, DEFAULT_MODEL
 from google.genai import errors as genai_errors
 from module import ffmpeg_module, srt_module
+from module import storage as storage_module
 from module.gemini_module import GeminiClient
 from module.video_split import SegmentMetadata, split_video_by_minutes, DEFAULT_STORAGE_KEY
 from module.Whisper_util import transcribe_audio_with_timestamps
@@ -30,6 +32,7 @@ logger = logging.getLogger(__name__)
 
 SUBTITLE_JOB_ROOT = os.path.join(BASE_DIR, "generated_subtitles")
 os.makedirs(SUBTITLE_JOB_ROOT, exist_ok=True)
+_HISTORY_STORAGE_PREFIX = "subtitle_job_history:"
 
 ENTRY_UPDATE_RESPONSE_SCHEMA: Dict[str, Any] = {
     "type": "object",
@@ -216,6 +219,36 @@ def _send_gemini_with_retry(
     raise RuntimeError("Gemini 요청 재시도에 실패했습니다.")
 
 
+def _history_storage_key(job_id: str) -> str:
+    return f"{_HISTORY_STORAGE_PREFIX}{job_id}"
+
+
+def _reset_saved_history(job_id: str) -> None:
+    storage_module.remove_value(_history_storage_key(job_id), None)
+
+
+def _persist_model_history(job_id: str, client: GeminiClient) -> List[Dict[str, Any]]:
+    """클라이언트 히스토리에서 모델 응답만 추려 저장합니다."""
+    model_messages: List[Dict[str, Any]] = []
+    try:
+        for message in client.get_history():
+            if message.get("role") != "model":
+                continue
+            model_messages.append(copy.deepcopy(message))
+    except Exception:
+        model_messages = []
+    storage_module.set_value(_history_storage_key(job_id), model_messages)
+    # start_chat 호출 시 외부 변형을 막기 위한 복사본 반환
+    return [copy.deepcopy(item) for item in model_messages]
+
+
+def _load_saved_model_history(job_id: str) -> List[Dict[str, Any]]:
+    stored = storage_module.get_value(_history_storage_key(job_id), [])
+    if not stored:
+        return []
+    return [copy.deepcopy(item) for item in stored]
+
+
 def _write_srt(entries: List[Dict[str, Any]], dest: str) -> str:
     lines: List[str] = []
     for idx, entry in enumerate(entries, start=1):
@@ -230,28 +263,6 @@ def _write_srt(entries: List[Dict[str, Any]], dest: str) -> str:
     with open(dest, "w", encoding="utf-8") as fp:
         fp.write(content)
     return dest
-
-
-def _build_transcript_context(entries: List[Dict[str, Any]], limit: int = 20) -> str:
-    if not entries:
-        return ""
-    recent = entries[-limit:]
-    lines = ["Previous transcript context (latest entries):"]
-    for item in recent:
-        try:
-            start = item.get("start", 0.0)
-            text = (item.get("text") or "").strip()
-            if not text:
-                continue
-            start_ts = _format_timestamp(start)
-            if len(text) > 240:
-                text = text[:237].rstrip() + "..."
-            lines.append(f"- [{start_ts}] {text}")
-        except Exception:
-            continue
-    if len(lines) == 1:
-        return ""
-    return "\n".join(lines)
 
 
 def _build_speech_windows(
@@ -442,9 +453,11 @@ def _create_segments_from_srt(job: "SubtitleJob", srt_path: str) -> List[Segment
             segment_path
         ]
         import subprocess
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        # Windows 기본 로캘(cp949)에서 FFmpeg 출력 디코딩 오류를 막기 위해 바이너리 모드로 실행
+        result = subprocess.run(cmd, capture_output=True)
         if result.returncode != 0:
-            logger.error(f"FFmpeg 분할 실패: {result.stderr}")
+            stderr_text = result.stderr.decode("utf-8", errors="ignore") if result.stderr else ""
+            logger.error(f"FFmpeg 분할 실패: {stderr_text}")
             raise RuntimeError(f"세그먼트 {idx} 분할 실패")
 
         # SegmentMetadata 생성
@@ -794,6 +807,7 @@ def start_job(
         custom_prompt=custom_prompt,
         model_name=model_name,
     )
+    _reset_saved_history(job_id)
 
     with _LOCK:
         _JOBS[job_id] = job
@@ -853,6 +867,7 @@ def _process_segment_entries(
             "max_wait_seconds": 900,
         },
     )
+    _persist_model_history(job.job_id, client)
     if isinstance(response, str):
         try:
             payload = json.loads(response or "{}")
@@ -977,12 +992,8 @@ def _process_segment(
         if allow_processed_increment:
             job.processed_segments += 1
         job.updated_at = _now()
-        context_text = _build_transcript_context(job.transcript_entries)
-        if context_text:
-            history_seed = [{'role': 'user', 'parts': [{'text': context_text}]}]
-        else:
-            history_seed = []
-        client.start_chat(history=history_seed, suppress_log=True, reset_usage=False)
+        model_history = _load_saved_model_history(job.job_id)
+        client.start_chat(history=model_history, suppress_log=True, reset_usage=False)
 
     return started_at
 
@@ -1119,6 +1130,8 @@ def _run_job(job: SubtitleJob, youtube_url: Optional[str], uploaded_path: Option
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.exception("Subtitle job %s failed", job.job_id)
         _update_job(job, status="failed", phase="error", message="작업 중 오류가 발생했습니다.", error=str(exc))
+    finally:
+        _reset_saved_history(job.job_id)
 
 
 __all__ = [
