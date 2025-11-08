@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>자막 보정 싱크</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Work+Sans:wght@400;500;600;700&family=Noto+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet" />
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+
+<body class="bg-slate-100" style='font-family: "Work Sans", "Noto Sans", sans-serif;'>
+    <div class="relative flex min-h-screen size-full flex-col">
+        <div class="layout-container flex h-full grow flex-col">
+            <header id="page-header" class="flex items-center justify-between whitespace-nowrap border-b border-solid border-b-slate-200 px-10 py-4 bg-white shadow-sm">
+                <div class="flex items-center gap-6">
+                    <div class="flex items-center gap-3 text-slate-900">
+                        <div class="size-7 text-[#0c77f2]">
+                            <svg fill="none" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M4 42.4379C4 42.4379 14.0962 36.0744 24 41.1692C35.0664 46.8624 44 42.2078 44 42.2078L44 7.01134C44 7.01134 35.068 11.6577 24.0031 5.96913C14.0971 0.876274 4 7.27094 4 7.27094L4 42.4379Z" fill="currentColor"></path>
+                            </svg>
+                        </div>
+                        <h2 class="text-slate-900 text-xl font-semibold leading-tight tracking-[-0.015em]">자막 번역기</h2>
+                    </div>
+                    <nav class="flex items-center gap-6">
+                        <a class="text-slate-700 hover:text-[#0c77f2] text-sm font-medium leading-normal transition-colors" href="/">자막 번역</a>
+                        <a class="text-slate-700 hover:text-[#0c77f2] text-sm font-medium leading-normal transition-colors" href="/subtitle_generate">자막 생성</a>
+                        <a class="text-[#0c77f2] text-sm font-semibold leading-normal" href="/subtitle_sync">자막 보정 싱크</a>
+                    </nav>
+                </div>
+                <div class="flex gap-3">
+                    <!-- 필요 시 상단 우측 액션 버튼 영역 -->
+                </div>
+            </header>
+
+            <main id="page-main" class="px-4 md:px-10 lg:px-20 py-10">
+                <div class="max-w-3xl mx-auto">
+                    <div class="flex flex-col w-full py-8 bg-white shadow-xl rounded-xl px-6 md:px-10">
+                        <div class="mb-8">
+                            <h1 class="text-2xl font-semibold text-slate-900">자막 보정 싱크</h1>
+                            <p class="mt-2 text-sm text-slate-600">Silero VAD를 활용하여 자막 타이밍을 음성 구간에 맞춰 자동으로 보정합니다.</p>
+                        </div>
+
+                        <!-- 파일 업로드 섹션 -->
+                        <section id="file-upload-section" class="space-y-4 mb-8">
+                            <h2 class="text-lg font-semibold text-slate-900">파일 업로드</h2>
+                            <div class="space-y-4">
+                                <!-- SRT 파일 -->
+                                <div class="flex flex-col gap-2">
+                                    <span class="text-sm font-medium text-slate-700">SRT 자막 파일</span>
+                                    <div class="relative">
+                                        <input
+                                            id="srt-file"
+                                            type="file"
+                                            accept=".srt"
+                                            class="hidden"
+                                        />
+                                        <button type="button" id="srt-file-btn" class="flex items-center justify-between w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-500 hover:border-slate-300 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20 transition-colors">
+                                            <span id="srt-file-name">파일을 선택하세요</span>
+                                            <span class="material-icons text-slate-400">upload_file</span>
+                                        </button>
+                                    </div>
+                                    <span class="text-xs text-slate-400">보정할 SRT 자막 파일을 선택하세요</span>
+                                </div>
+
+                                <!-- 오디오/비디오 파일 -->
+                                <div class="flex flex-col gap-2">
+                                    <span class="text-sm font-medium text-slate-700">오디오/비디오 파일</span>
+                                    <div class="relative">
+                                        <input
+                                            id="audio-file"
+                                            type="file"
+                                            accept="audio/*,video/*"
+                                            class="hidden"
+                                        />
+                                        <button type="button" id="audio-file-btn" class="flex items-center justify-between w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-500 hover:border-slate-300 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20 transition-colors">
+                                            <span id="audio-file-name">파일을 선택하세요</span>
+                                            <span class="material-icons text-slate-400">upload_file</span>
+                                        </button>
+                                    </div>
+                                    <span class="text-xs text-slate-400">음성 구간 검출에 사용할 오디오/비디오 파일을 선택하세요</span>
+                                </div>
+                            </div>
+                        </section>
+
+                        <!-- 고급 설정 -->
+                        <section id="advanced-settings-section" class="space-y-4 mb-8">
+                            <details>
+                                <summary class="cursor-pointer text-lg font-semibold text-slate-900 hover:text-[#0c77f2] transition-colors select-none">
+                                    고급 설정
+                                </summary>
+                                <div class="mt-4 space-y-6">
+                                    <!-- VAD 설정 -->
+                                    <div>
+                                        <h3 class="text-base font-semibold text-slate-900 mb-3">VAD 설정</h3>
+                                        <div class="grid gap-4">
+                                            <label class="flex flex-col gap-2">
+                                                <span class="text-sm font-medium text-slate-700">임계값 (0.0-1.0)</span>
+                                                <input type="number" id="vad-threshold" value="0.55" step="0.05" min="0" max="1"
+                                                    class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20" />
+                                                <span class="text-xs text-slate-400">음성 감지 민감도 (높을수록 엄격)</span>
+                                            </label>
+                                            <label class="flex flex-col gap-2">
+                                                <span class="text-sm font-medium text-slate-700">최소 음성 길이 (ms)</span>
+                                                <input type="number" id="min-speech-duration" value="200" step="10"
+                                                    class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20" />
+                                                <span class="text-xs text-slate-400">이보다 짧은 음성은 무시</span>
+                                            </label>
+                                            <label class="flex flex-col gap-2">
+                                                <span class="text-sm font-medium text-slate-700">최소 무음 길이 (ms)</span>
+                                                <input type="number" id="min-silence-duration" value="250" step="10"
+                                                    class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20" />
+                                                <span class="text-xs text-slate-400">이보다 짧은 무음은 무시</span>
+                                            </label>
+                                            <label class="flex flex-col gap-2">
+                                                <span class="text-sm font-medium text-slate-700">음성 패딩 (ms)</span>
+                                                <input type="number" id="speech-pad" value="80" step="10"
+                                                    class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20" />
+                                                <span class="text-xs text-slate-400">음성 앞뒤로 추가할 여유 시간</span>
+                                            </label>
+                                        </div>
+                                    </div>
+
+                                    <!-- 경계 보정 설정 -->
+                                    <div>
+                                        <h3 class="text-base font-semibold text-slate-900 mb-3">경계 보정 설정</h3>
+                                        <div class="grid gap-4">
+                                            <label class="flex flex-col gap-2">
+                                                <span class="text-sm font-medium text-slate-700">청크 간격 임계값 (ms)</span>
+                                                <input type="number" id="gap-threshold" value="200" step="50"
+                                                    class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20" />
+                                                <span class="text-xs text-slate-400">자막을 하나의 청크로 묶을 최대 간격</span>
+                                            </label>
+                                            <label class="flex flex-col gap-2">
+                                                <span class="text-sm font-medium text-slate-700">탐색 범위 - 시작 뒤 (ms)</span>
+                                                <input type="number" id="lookback-start" value="800" step="50"
+                                                    class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20" />
+                                                <span class="text-xs text-slate-400">시작 지점에서 뒤로 탐색할 범위</span>
+                                            </label>
+                                            <label class="flex flex-col gap-2">
+                                                <span class="text-sm font-medium text-slate-700">탐색 범위 - 시작 앞 (ms)</span>
+                                                <input type="number" id="lookahead-start" value="400" step="50"
+                                                    class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20" />
+                                                <span class="text-xs text-slate-400">시작 지점에서 앞으로 탐색할 범위</span>
+                                            </label>
+                                            <label class="flex flex-col gap-2">
+                                                <span class="text-sm font-medium text-slate-700">경계 패딩 (ms)</span>
+                                                <input type="number" id="pad" value="80" step="10"
+                                                    class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20" />
+                                                <span class="text-xs text-slate-400">보정된 경계에 추가할 여유 시간</span>
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+                            </details>
+                        </section>
+
+                        <!-- 처리 버튼 -->
+                        <div class="flex items-center justify-between flex-wrap gap-3 mb-6">
+                            <p class="text-xs text-slate-500">파일 크기와 네트워크에 따라 다소 시간이 걸릴 수 있습니다.</p>
+                            <button id="process-btn" class="flex min-w-[140px] items-center justify-center gap-2 rounded-md bg-[#0c77f2] px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-600 disabled:opacity-60 disabled:cursor-not-allowed">
+                                <span class="material-icons text-base">sync</span>
+                                <span>자막 보정 시작</span>
+                            </button>
+                        </div>
+
+                        <!-- 진행 상태 -->
+                        <div id="progress-section" class="hidden mb-6">
+                            <div class="rounded-lg border border-blue-300 bg-blue-50 px-4 py-3">
+                                <div class="flex items-center gap-3 mb-2">
+                                    <div class="animate-spin">
+                                        <span class="material-icons text-[#0c77f2]">refresh</span>
+                                    </div>
+                                    <span id="progress-text" class="text-sm text-slate-900 font-medium">처리 중...</span>
+                                </div>
+                                <div class="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
+                                    <div id="progress-bar" class="bg-[#0c77f2] h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 결과 통계 -->
+                        <div id="stats-section" class="hidden mb-6">
+                            <h3 class="text-base font-semibold text-slate-900 mb-3">보정 통계</h3>
+                            <div class="rounded-lg border border-green-300 bg-green-50 px-4 py-4">
+                                <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                    <div>
+                                        <p class="text-slate-600 text-xs mb-1">총 엔트리</p>
+                                        <p id="stat-entries" class="text-slate-900 text-xl font-bold">-</p>
+                                    </div>
+                                    <div>
+                                        <p class="text-slate-600 text-xs mb-1">청크 수</p>
+                                        <p id="stat-chunks" class="text-slate-900 text-xl font-bold">-</p>
+                                    </div>
+                                    <div>
+                                        <p class="text-slate-600 text-xs mb-1">VAD 세그먼트</p>
+                                        <p id="stat-segments" class="text-slate-900 text-xl font-bold">-</p>
+                                    </div>
+                                    <div>
+                                        <p class="text-slate-600 text-xs mb-1">보정된 청크</p>
+                                        <p id="stat-corrections" class="text-slate-900 text-xl font-bold">-</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 결과 미리보기 및 다운로드 -->
+                        <div id="result-section" class="hidden mb-6">
+                            <div class="flex items-center justify-between mb-3">
+                                <h3 class="text-base font-semibold text-slate-900">보정된 자막</h3>
+                                <button id="download-btn" class="flex items-center gap-2 rounded-md bg-green-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-green-700">
+                                    <span class="material-icons text-sm">download</span>
+                                    <span>다운로드</span>
+                                </button>
+                            </div>
+                            <textarea id="result-srt" rows="12"
+                                class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 font-mono focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20 resize-y"
+                                readonly></textarea>
+                        </div>
+
+                        <!-- 에러 표시 -->
+                        <div id="error-section" class="hidden mb-6">
+                            <div class="rounded-lg border border-red-300 bg-red-50 px-4 py-3">
+                                <div class="flex items-start gap-3">
+                                    <span class="material-icons text-red-600">error</span>
+                                    <div>
+                                        <h4 class="text-red-900 font-semibold text-sm mb-1">처리 중 오류 발생</h4>
+                                        <p id="error-message" class="text-red-700 text-sm"></p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 사용 안내 -->
+                    <div class="mt-8 flex flex-col w-full py-6 bg-white shadow-xl rounded-xl px-6 md:px-10">
+                        <h3 class="text-lg font-semibold text-slate-900 mb-4">사용 방법</h3>
+                        <ol class="space-y-3 text-sm text-slate-700">
+                            <li class="flex gap-3">
+                                <span class="font-bold text-[#0c77f2] flex-shrink-0">1.</span>
+                                <span>보정할 SRT 자막 파일을 업로드합니다.</span>
+                            </li>
+                            <li class="flex gap-3">
+                                <span class="font-bold text-[#0c77f2] flex-shrink-0">2.</span>
+                                <span>음성 구간 검출에 사용할 오디오 또는 비디오 파일을 업로드합니다.</span>
+                            </li>
+                            <li class="flex gap-3">
+                                <span class="font-bold text-[#0c77f2] flex-shrink-0">3.</span>
+                                <span>필요시 고급 설정에서 VAD 파라미터와 보정 설정을 조정합니다.</span>
+                            </li>
+                            <li class="flex gap-3">
+                                <span class="font-bold text-[#0c77f2] flex-shrink-0">4.</span>
+                                <span>"자막 보정 시작" 버튼을 클릭하여 처리를 시작합니다.</span>
+                            </li>
+                            <li class="flex gap-3">
+                                <span class="font-bold text-[#0c77f2] flex-shrink-0">5.</span>
+                                <span>보정이 완료되면 결과를 미리보고 다운로드합니다.</span>
+                            </li>
+                        </ol>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <script src="{{ url_for('static', filename='js/subtitle_sync.js') }}" defer></script>
+</body>
+
+</html>

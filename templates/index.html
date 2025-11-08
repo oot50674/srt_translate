@@ -2,22 +2,22 @@
 <html lang="ko">
 
 <head>
-    <meta charset="utf-8" />
-    <link crossorigin="" href="https://fonts.gstatic.com/" rel="preconnect" />
-    <link as="style" href="https://fonts.googleapis.com/css2?display=swap&amp;family=Noto+Sans%3Awght%40400%3B500%3B700%3B900&amp;family=Work+Sans%3Awght%40400%3B500%3B700%3B900" onload="this.rel='stylesheet'" rel="stylesheet" />
-    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet" />
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>자막 번역기</title>
-    <link href="data:image/x-icon;base64," rel="icon" type="image/x-icon" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Work+Sans:wght@400;500;600;700&family=Noto+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet" />
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
     <link rel="stylesheet" href="{{ url_for('static', filename='css/toast.css') }}" />
-    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
-    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
 </head>
 
-<body data-missing-api-key="{{ 'true' if missing_api_key else 'false' }}">
-    <div class="relative flex min-h-screen size-full flex-col bg-slate-100 group/design-root overflow-x-hidden" style='font-family: "Work Sans", "Noto Sans", sans-serif;'>
+<body class="bg-slate-100" style='font-family: "Work Sans", "Noto Sans", sans-serif;' data-missing-api-key="{{ 'true' if missing_api_key else 'false' }}">
+    <div class="relative flex min-h-screen size-full flex-col">
         <div class="layout-container flex h-full grow flex-col">
-            <header class="flex items-center justify-between whitespace-nowrap border-b border-solid border-b-slate-200 px-10 py-4 bg-white shadow-sm">
+            <header id="page-header" class="flex items-center justify-between whitespace-nowrap border-b border-solid border-b-slate-200 px-10 py-4 bg-white shadow-sm">
                 <div class="flex items-center gap-6">
                     <div class="flex items-center gap-3 text-slate-900">
                         <div class="size-7 text-[#0c77f2]">
@@ -30,29 +30,26 @@
                     <nav class="flex items-center gap-6">
                         <a class="text-[#0c77f2] text-sm font-semibold leading-normal" href="/">자막 번역</a>
                         <a class="text-slate-700 hover:text-[#0c77f2] text-sm font-medium leading-normal transition-colors" href="/subtitle_generate">자막 생성</a>
+                        <a class="text-slate-700 hover:text-[#0c77f2] text-sm font-medium leading-normal transition-colors" href="/subtitle_sync">자막 보정 싱크</a>
                     </nav>
                 </div>
                 <div class="flex gap-3">
-                        <!-- 
-                        <button class="flex min-w-[84px] max-w-[480px] cursor-pointer items-center justify-center overflow-hidden rounded-md h-10 px-4 bg-[#0c77f2] text-slate-50 text-sm font-semibold leading-normal tracking-[0.015em] hover:bg-blue-600 transition-colors">
-                            <span class="truncate">회원가입</span>
-                        </button>
-                        <button class="flex min-w-[84px] max-w-[480px] cursor-pointer items-center justify-center overflow-hidden rounded-md h-10 px-4 bg-slate-200 text-slate-700 text-sm font-semibold leading-normal tracking-[0.015em] hover:bg-slate-300 transition-colors">
-                            <span class="truncate">로그인</span>
-                        </button> 
-                        -->
-                    </div>
+                    <!-- 필요 시 상단 우측 액션 버튼 영역 -->
                 </div>
             </header>
-            <main class="px-4 md:px-10 lg:px-20 py-10">
+
+            <main id="page-main" class="px-4 md:px-10 lg:px-20 py-10">
                 <div class="max-w-3xl mx-auto">
-                    <div class="layout-content-container flex flex-col w-full py-8 bg-white shadow-xl rounded-xl">
-                        <div class="px-6 sm:px-8 md:px-12">
-                            <h2 class="text-slate-900 tracking-tight text-3xl font-bold leading-tight text-center pb-2 pt-6">자막 번역하기</h2>
-                            <p class="text-slate-600 text-base font-normal leading-relaxed pb-4 pt-2 text-center">SRT 자막 파일을 쉽게 번역하세요. 아래에 파일을 업로드하거나 내용을 직접 붙여넣으세요.</p>
+                    <div class="flex flex-col w-full py-8 bg-white shadow-xl rounded-xl px-6 md:px-10">
+                        <div class="mb-8">
+                            <h1 class="text-2xl font-semibold text-slate-900">자막 번역</h1>
+                            <p class="mt-2 text-sm text-slate-600">SRT 파일을 업로드하여 원하는 언어로 번역하세요.</p>
                             {% if missing_api_key %}
-                            <div id="missing-api-key-alert" class="mb-6 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 text-center">Google API Key가 아직 설정되지 않았습니다. 우측 상단의 추가 설정 패널에서 키를 입력해 주세요.</div>
+                            <div class="mt-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                                Google API Key가 설정되지 않았습니다. 추가 설정에서 키를 저장한 뒤 다시 시도하세요.
+                            </div>
                             {% endif %}
+                        </div>
                             <!-- 데이터 전송은 JavaScript에서 처리합니다 -->
                             <form id="srt-upload-form">
                                 <div class="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">

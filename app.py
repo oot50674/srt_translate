@@ -15,6 +15,7 @@ from module.subtitle_generation import (
     get_segment_path as get_subtitle_segment_path,
     request_stop as stop_subtitle_job,
 )
+from module.subtitle_sync import sync_subtitles, export_srt, SyncConfig
 from module.database_module import (
     list_presets,
     get_preset,
@@ -62,6 +63,12 @@ def subtitle_generate():
     """자막 생성 페이지 템플릿을 렌더링합니다."""
     missing_api_key = not bool(os.environ.get('GOOGLE_API_KEY', '').strip())
     return render_template('subtitle_generate.html', missing_api_key=missing_api_key)
+
+
+@app.route('/subtitle_sync')
+def subtitle_sync():
+    """자막 보정 싱크 페이지 템플릿을 렌더링합니다."""
+    return render_template('subtitle_sync.html')
 
 
 @app.route('/subtitle_jobs/<job_id>')
@@ -566,6 +573,134 @@ def api_save_preset(name):
 def api_delete_preset(name):
     delete_preset(name)
     return jsonify({'status': 'deleted'})
+
+
+# ----- Subtitle Sync API -----
+
+@app.route('/api/subtitle_sync/process', methods=['POST'])
+def api_process_subtitle_sync():
+    """자막 보정 싱크 처리 API
+
+    Request:
+        - srt_file: SRT 파일
+        - audio_file: 오디오/비디오 파일
+        - config: 설정 JSON (선택)
+
+    Returns:
+        - corrected_srt: 보정된 SRT 문자열
+        - stats: 통계 정보
+    """
+    try:
+        # 파일 업로드 확인
+        srt_file = request.files.get('srt_file')
+        audio_file = request.files.get('audio_file')
+
+        if not srt_file or not audio_file:
+            return jsonify({'error': 'SRT 파일과 오디오 파일이 필요합니다.'}), 400
+
+        # 설정 파싱
+        config_data = request.form.get('config')
+        if config_data:
+            try:
+                config_dict = json.loads(config_data)
+                config = SyncConfig(**config_dict)
+            except Exception as e:
+                logger.warning(f"설정 파싱 실패, 기본값 사용: {e}")
+                config = SyncConfig()
+        else:
+            config = SyncConfig()
+
+        # 임시 파일 저장
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.srt', mode='wb') as srt_tmp:
+            srt_file.save(srt_tmp.name)
+            srt_tmp_path = srt_tmp.name
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4', mode='wb') as audio_tmp:
+            audio_file.save(audio_tmp.name)
+            audio_tmp_path = audio_tmp.name
+
+        try:
+            # SRT 파일 읽기
+            subtitles = srt_module.read_srt(srt_tmp_path)
+
+            if not subtitles:
+                return jsonify({'error': 'SRT 파일을 파싱할 수 없습니다.'}), 400
+
+            # 자막 보정 처리
+            logger.info(f"자막 보정 시작: {len(subtitles)}개 엔트리")
+            corrected_subtitles, stats = sync_subtitles(subtitles, audio_tmp_path, config)
+
+            # SRT 형식으로 변환
+            corrected_srt = export_srt(corrected_subtitles)
+
+            return jsonify({
+                'corrected_srt': corrected_srt,
+                'stats': stats
+            })
+
+        finally:
+            # 임시 파일 정리
+            try:
+                os.remove(srt_tmp_path)
+            except:
+                pass
+            try:
+                os.remove(audio_tmp_path)
+            except:
+                pass
+
+    except Exception as e:
+        logger.exception("자막 보정 처리 중 오류 발생")
+        return jsonify({'error': f'처리 중 오류가 발생했습니다: {str(e)}'}), 500
+
+
+@app.route('/api/subtitle_sync/extract_audio', methods=['POST'])
+def api_extract_audio_from_video():
+    """비디오에서 오디오 추출 API (선택적)
+
+    Request:
+        - video_file: 비디오 파일
+
+    Returns:
+        - audio_url: 추출된 오디오 파일 URL
+    """
+    try:
+        video_file = request.files.get('video_file')
+
+        if not video_file:
+            return jsonify({'error': '비디오 파일이 필요합니다.'}), 400
+
+        # 임시 비디오 파일 저장
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4', mode='wb') as video_tmp:
+            video_file.save(video_tmp.name)
+            video_tmp_path = video_tmp.name
+
+        # 오디오 추출
+        audio_tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
+        audio_tmp_path = audio_tmp.name
+        audio_tmp.close()
+
+        try:
+            ffmpeg_module.extract_audio(video_tmp_path, audio_tmp_path)
+
+            # 추출된 오디오 반환
+            return send_file(
+                audio_tmp_path,
+                mimetype='audio/wav',
+                as_attachment=True,
+                download_name='extracted_audio.wav'
+            )
+
+        finally:
+            # 비디오 임시 파일 정리
+            try:
+                os.remove(video_tmp_path)
+            except:
+                pass
+
+    except Exception as e:
+        logger.exception("오디오 추출 중 오류 발생")
+        return jsonify({'error': f'오디오 추출 중 오류가 발생했습니다: {str(e)}'}), 500
 
 if __name__ == '__main__':
     app.run(debug=True)
