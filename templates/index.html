@@ -69,12 +69,12 @@
                                     </div>
                                     <div class="flex flex-col">
                                         <h3 class="text-slate-800 text-xl font-semibold leading-tight tracking-[-0.015em] mb-3">자막 텍스트 붙여넣기</h3>
-                                        <textarea id="srt-text" name="srt_text" class="form-input flex w-full min-w-0 flex-1 resize-y overflow-hidden rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#0c77f2] border border-slate-300 bg-slate-50 focus:border-[#0c77f2] min-h-48 placeholder:text-slate-400 p-4 text-sm font-normal leading-normal" placeholder="자막 텍스트를 여기에 붙여넣으세요 (예: SRT 파일에서)"></textarea>
+                                        <textarea id="srt-text" name="srt_text" class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20 resize-y flex-1 min-h-0" placeholder="자막 텍스트를 여기에 붙여넣으세요 (예: SRT 파일에서)"></textarea>
                                     </div>
                                 </div>
                                 <div class="mt-6">
                                     <label for="youtube-url" class="block text-sm font-medium text-slate-700 mb-1">YouTube 링크 (선택)</label>
-                                    <input type="url" id="youtube-url" class="form-input w-full rounded-md border-slate-300" placeholder="https://www.youtube.com/watch?v=..." />
+                                    <input type="url" id="youtube-url" class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20" placeholder="https://www.youtube.com/watch?v=..." />
                                     <p class="text-xs text-slate-500 mt-1">유튜브 영상 링크를 제공하면 주요 장면 스냅샷을 분석해 맥락을 반영합니다.</p>
                                 </div>
                                 <div class="mt-6 flex flex-col gap-4">
@@ -82,7 +82,7 @@
                                     <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                                         <div>
                                             <label for="target-lang" class="block text-sm font-medium text-slate-700 mb-1">타겟 언어</label>
-                                            <input type="text" id="target-lang" class="form-input w-full rounded-md border-slate-300" placeholder="예: 한국어" list="target-lang-options" />
+                                            <input type="text" id="target-lang" class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20" placeholder="예: 한국어" list="target-lang-options" />
                                             <datalist id="target-lang-options">
                                                 <option value="한국어">
                                                 <option value="영어">
@@ -93,7 +93,7 @@
                                         </div>
                                         <div>
                                             <label for="chunk-size" class="block text-sm font-medium text-slate-700 mb-1">청크 크기</label>
-                                            <input type="number" id="chunk-size" class="form-input w-full rounded-md border-slate-300" min="1" value="50" />
+                                            <input type="number" id="chunk-size" class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20" min="1" value="50" />
                                         </div>
                                         <div>
                                             <div class="flex justify-between items-center">
@@ -103,7 +103,7 @@
                                                     <label for="disable-thinking" class="text-xs text-slate-600">비활성화</label>
                                                 </div>
                                             </div>
-                                            <input type="text" id="thinking-budget" class="form-input w-full rounded-md border-slate-300" value="auto" placeholder="예: 2048 또는 auto" list="thinking-budget-options" />
+                                            <input type="text" id="thinking-budget" class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20" value="auto" placeholder="예: 2048 또는 auto" list="thinking-budget-options" />
                                             <datalist id="thinking-budget-options">
                                                 <option value="auto">
                                                 <option value="512">
@@ -114,14 +114,14 @@
                                     </div>
                                     <div>
                                         <label for="custom-prompt" class="block text-sm font-medium text-slate-700 mb-1">커스텀 프롬프트</label>
-                                        <textarea id="custom-prompt" class="form-input w-full rounded-md border-slate-300 resize-y p-2 text-sm" rows="4" placeholder="추가 프롬프트를 입력하세요"></textarea>
+                                        <textarea id="custom-prompt" class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20 resize-y" rows="4" placeholder="추가 프롬프트를 입력하세요"></textarea>
                                     </div>
                                     <div>
                                         <label for="custom-prompt" class="block text-sm font-medium text-slate-700 mb-1">프리셋</label>
                                         <div class="flex gap-2 items-center">
-                                            <select id="preset-select" class="form-select rounded-md border-slate-300 text-sm"></select>
-                                            <button type="button" id="save-preset-btn" class="px-3 py-2 bg-slate-200 rounded-md text-sm font-semibold hover:bg-slate-300">저장</button>
-                                            <button type="button" id="delete-preset-btn" class="px-3 py-2 bg-red-100 text-red-700 rounded-md text-sm font-semibold hover:bg-red-200 disabled:opacity-40 disabled:cursor-not-allowed" disabled>삭제</button>
+                                            <select id="preset-select" class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900"></select>
+                                            <button type="button" id="save-preset-btn" class="px-5 py-2 bg-slate-200 rounded-md text-sm font-semibold hover:bg-slate-300">저장</button>
+                                            <button type="button" id="delete-preset-btn" class="px-5 py-2 bg-red-100 text-red-700 rounded-md text-sm font-semibold hover:bg-red-200 disabled:opacity-40 disabled:cursor-not-allowed" disabled>삭제</button>
                                             <button type="button" id="new-preset-btn" class="ml-auto px-3 py-2 bg-slate-900 text-white rounded-md text-sm font-semibold hover:bg-slate-700">새로 만들기</button>
                                         </div>
                                     </div>
@@ -159,20 +159,20 @@
             </button>
         </div>
         <div class="flex-1 overflow-y-auto px-6 py-5">
-            <div class="flex flex-col gap-5">
+                    <div class="flex flex-col gap-5">
                 {% if missing_api_key %}
                 <div id="panel-missing-api-key-alert" class="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">처음 사용 중이라면 Google API Key를 입력하고 저장해 주세요. 입력 후 번역 요청 시 .env에도 저장됩니다.</div>
                 {% endif %}
-                <div>
+                    <div>
                     <label for="api-key" class="block text-sm font-medium text-slate-700 mb-1">Google API Key</label>
-                    <div class="flex gap-2">
-                        <input type="password" id="api-key" class="form-input w-full rounded-md border-slate-300" placeholder="예: AIza..." autocomplete="off" />
+                        <div class="flex gap-2">
+                        <input type="password" id="api-key" class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20" placeholder="예: AIza..." autocomplete="off" />
                         <button type="button" id="save-api-key-btn" class="inline-flex items-center justify-center whitespace-nowrap rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-700 transition-colors shrink-0">저장</button>
                     </div>
                 </div>
-                <div>
+                    <div>
                     <label for="model-name" class="block text-sm font-medium text-slate-700 mb-1">모델 이름</label>
-                    <input type="text" id="model-name" class="form-input w-full rounded-md border-slate-300" placeholder="예: gemini-2.5-flash" />
+                    <input type="text" id="model-name" class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20" placeholder="예: gemini-2.5-flash" />
                 </div>
                 <div>
                     <div class="flex items-center justify-between">
@@ -184,14 +184,14 @@
                     </div>
                     <p class="text-xs text-slate-500 mt-1">컨텍스트가 일정 길이를 초과하면 서버에서 히스토리를 요약/압축합니다.</p>
                 </div>
-                <div>
+                    <div>
                     <label for="context-limit" class="block text-sm font-medium text-slate-700 mb-1">컨텍스트 제한 (토큰)</label>
-                    <input type="number" id="context-limit" class="form-input w-full rounded-md border-slate-300" min="5000" step="1" value="20000" />
+                    <input type="number" id="context-limit" class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20" min="5000" step="1" value="20000" />
                 </div>
                 <!-- 추가 설정 (Config) 은 프리셋과 완전히 별개입니다. RPM 제한은 전역 레이트리미트로 적용됩니다. -->
                 <div>
                     <label for="rpm-limit" class="block text-sm font-medium text-slate-700 mb-1">RPM 제한<span class="text-xs text-slate-500 ml-1">(Requests Per Minute)</span></label>
-                    <input type="number" id="rpm-limit" class="form-input w-full rounded-md border-slate-300" min="1" step="1" value="9" />
+                    <input type="number" id="rpm-limit" class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20" min="1" step="1" value="9" />
                     <p class="text-xs text-slate-500 mt-1">모델 호출 최대 횟수/분. 너무 낮게 설정하면 번역이 지연될 수 있습니다.</p>
                 </div>
             </div>

@@ -176,7 +176,7 @@ def _send_gemini_with_retry(
                 wait_seconds = max(5.0, (retry_delay or 0.0) + 5.0)
                 warning_text = (
                     f"{context} 중 Gemini 쿼터 제한에 도달했습니다. "
-                    f"{wait_seconds:.1f}초 후 재시도합니다. (시도 {attempt}/{max_attempts})"
+                    f"{wait_seconds:.1f}초 후 재시도합니다."
                 )
                 if job:
                     job.append_log(warning_text, level="warning")
@@ -191,7 +191,7 @@ def _send_gemini_with_retry(
                 wait_seconds = max(5.0, (retry_delay or 0.0) + 5.0)
                 warning_text = (
                     f"{context} 중 오류가 발생했습니다: {error_text}. "
-                    f"{wait_seconds:.1f}초 후 재시도합니다. (추가 재시도 1/1)"
+                    f"{wait_seconds:.1f}초 후 재시도합니다."
                 )
                 if job:
                     job.append_log(warning_text, level="warning")
@@ -207,7 +207,7 @@ def _send_gemini_with_retry(
                 wait_seconds = 60.0
                 warning_text = (
                     f"{context} 중 알 수 없는 오류가 발생했습니다: {exc}. "
-                    f"{wait_seconds:.1f}초 후 재시도합니다. (추가 재시도 1/1)"
+                    f"{wait_seconds:.1f}초 후 재시도합니다."
                 )
                 if job:
                     job.append_log(warning_text, level="warning")
