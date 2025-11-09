@@ -40,21 +40,21 @@
                     <div class="flex flex-col w-full py-8 bg-white shadow-xl rounded-xl px-6 md:px-10">
                         <div class="mb-8">
                             <h1 class="text-2xl font-semibold text-slate-900">자막 생성</h1>
-                            <p class="mt-2 text-sm text-slate-600">YouTube 링크 또는 영상 파일을 업로드하여 자막을 생성하고, 원본 전사 또는 번역 옵션을 선택하세요.</p>
+                            <p class="mt-2 text-sm text-slate-600">YouTube 링크 또는 영상/오디오 파일을 업로드하여 자막을 생성하고, 원본 전사 또는 번역 옵션을 선택하세요.</p>
                             {% if missing_api_key %}
-                            <div class="mt-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                                Google API Key가 설정되지 않았습니다. 추가 설정에서 키를 저장한 뒤 다시 시도하세요.
+                            <div id="api-key-warning" class="mt-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                                Google API Key가 설정되지 않았습니다. Whisper-only 모드에서는 키 없이도 전사할 수 있습니다.
                             </div>
                             {% endif %}
                         </div>
                         <div id="subtitle-generate-alert" class="hidden rounded-lg border px-4 py-3 text-sm mb-6"></div>
                         <form id="subtitle-generate-form" class="space-y-8" method="post" enctype="multipart/form-data">
                             <section id="video-source-section" class="space-y-4">
-                                <h2 class="text-lg font-semibold text-slate-900">영상 소스</h2>
+                                <h2 class="text-lg font-semibold text-slate-900">영상/오디오 소스</h2>
                                 <div class="grid gap-4">
                                     <label class="flex flex-col gap-2">
                                         <span class="text-sm font-medium text-slate-700">YouTube 링크</span>
-                                        <input type="url" name="youtube_url" placeholder="https://www.youtube.com/watch?v=..." class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20">
+                                        <input type="url" id="youtube-url-input" name="youtube_url" placeholder="https://www.youtube.com/watch?v=..." class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20">
                                     </label>
                                     <div class="flex items-center justify-center gap-2 text-sm text-slate-500 w-full">
                                         <span class="h-px flex-1 bg-slate-200"></span>
@@ -63,17 +63,17 @@
                                     </div>
                                     <div class="flex flex-col">
                                         <h3 class="text-sm font-medium text-slate-700">파일 업로드</h3>
-                                        <p class="text-xs text-slate-500 mt-1 mb-2">영상 파일과 SRT 자막 파일을 함께 업로드할 수 있습니다. 필요하다면 별도의 음성 파일을 추가해 영상 오디오 트랙을 교체할 수 있습니다.</p>
+                                        <p class="text-xs text-slate-500 mt-1 mb-2">영상 또는 오디오 파일과 SRT 자막 파일을 함께 업로드할 수 있습니다. 필요하다면 별도의 음성 파일을 추가해 영상 오디오 트랙을 교체할 수 있습니다.</p>
                                         <div id="file-drop-zone" class="flex flex-col items-center justify-center gap-4 rounded-lg border-2 border-dashed border-slate-300 px-6 py-8 text-center bg-slate-50 hover:border-slate-400 transition-colors">
                                             <div class="flex items-center gap-2">
                                                 <span class="material-icons text-4xl text-slate-400">cloud_upload</span>
                                             </div>
                                             <div>
                                                 <p class="text-slate-700 text-base font-medium leading-tight">여기에 파일을 끌어다 놓으세요</p>
-                                                <p class="text-slate-500 text-sm font-normal leading-normal mt-1">영상 (필수) + SRT/음성 파일 (선택)</p>
+                                                <p class="text-slate-500 text-sm font-normal leading-normal mt-1">영상/오디오 (필수) + SRT/음성 파일 (선택)</p>
                                             </div>
                                             <p class="text-slate-500 text-sm font-normal leading-normal">또는</p>
-                                            <input type="file" name="video_file" id="video-file" accept="video/*" class="hidden" />
+                                            <input type="file" name="video_file" id="video-file" accept="video/*,audio/*" class="hidden" />
                                             <input type="file" name="srt_file" id="srt-file" accept=".srt" class="hidden" />
                                             <input type="file" name="voice_file" id="voice-file" accept="audio/*" class="hidden" />
                                             <input type="file" id="file-input" accept="video/*,audio/*,.srt" multiple class="hidden" />
@@ -91,17 +91,24 @@
                                 <h2 class="text-lg font-semibold text-slate-900">전사 및 번역 설정</h2>
                                 <div class="space-y-3">
                                     <label class="flex items-center gap-3">
-                                        <input type="radio" name="transcription_mode" value="transcribe" class="h-4 w-4 text-[#0c77f2] focus:ring-[#0c77f2]" checked>
+                                        <input type="radio" id="mode-transcribe-radio" name="transcription_mode" value="transcribe" class="h-4 w-4 text-[#0c77f2] focus:ring-[#0c77f2]" checked>
                                         <span class="text-sm text-slate-700">원본 언어로만 전사</span>
                                     </label>
                                     <label class="flex items-center gap-3">
-                                        <input type="radio" name="transcription_mode" value="translate" class="h-4 w-4 text-[#0c77f2] focus:ring-[#0c77f2]">
+                                        <input type="radio" id="mode-translate-radio" name="transcription_mode" value="translate" class="h-4 w-4 text-[#0c77f2] focus:ring-[#0c77f2]">
                                         <span class="text-sm text-slate-700">특정 언어로 번역</span>
                                     </label>
+                                    <label class="flex items-center gap-3">
+                                        <input type="radio" id="mode-whisper-radio" name="transcription_mode" value="whisper_only" class="h-4 w-4 text-[#0c77f2] focus:ring-[#0c77f2]">
+                                        <span class="text-sm text-slate-700">Whisper 전사만 사용 (LLM 미사용)</span>
+                                    </label>
+                                    <div id="whisper-only-note" class="hidden rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-xs text-slate-600">
+                                        Whisper-only 모드는 Whisper 전사 결과만으로 자막을 구성하며 Gemini API 키 없이도 실행됩니다.
+                                    </div>
                                     <div id="translation-language" class="hidden md:flex md:flex-col">
                                         <label class="flex flex-col gap-2">
                                             <span class="text-sm font-medium text-slate-700">번역 대상 언어</span>
-                                            <input type="text" name="target_language" placeholder="예: 영어, 일본어" value="한국어" class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20">
+                                            <input type="text" id="target-language-input" name="target_language" placeholder="예: 영어, 일본어" value="한국어" class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20">
                                         </label>
                                     </div>
                                 </div>
@@ -112,7 +119,7 @@
                                 <div class="grid gap-2">
                                     <label class="flex flex-col gap-2">
                                         <span class="text-sm font-medium text-slate-700">청크 길이 (분)</span>
-                                        <input type="number" name="chunk_minutes" value="2" min="1" max="5" step="1" class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20">
+                                        <input type="number" id="chunk-minutes-input" name="chunk_minutes" value="2" min="1" max="5" step="1" class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20">
                                         <span class="text-xs text-slate-400">1~5분(최대) 단위로 설정할 수 있습니다.</span>
                                     </label>
                                 </div>
@@ -128,7 +135,7 @@
                                 <div class="grid gap-4">
                                    <label class="flex flex-col gap-2">
                                         <span class="text-sm font-medium text-slate-700">모델 선택</span>
-                                        <input type="text" name="model" placeholder="" value="gemini-flash-latest" class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20">
+                                        <input type="text" id="model-input" name="model" placeholder="" value="gemini-flash-latest" class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20">
                                         <span class="text-xs text-slate-400">
                                             <span class="material-icons text-xs align-middle">info</span>
                                             사용할 Gemini 모델명을 입력하세요. (추천 모델: gemini-flash-latest)
@@ -136,7 +143,7 @@
                                     </label>
                                     <label class="flex flex-col gap-2">
                                         <span class="text-sm font-medium text-slate-700">커스텀 프롬프트 (선택사항)</span>
-                                        <textarea name="custom_prompt" rows="4" placeholder="예: 전문 용어를 정확하게 전사해주세요, 구어체를 자연스럽게 표현해주세요, 등" class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20 resize-none"></textarea>
+                                        <textarea id="custom-prompt-textarea" name="custom_prompt" rows="4" placeholder="예: 전문 용어를 정확하게 전사해주세요, 구어체를 자연스럽게 표현해주세요, 등" class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20 resize-none"></textarea>
                                         <span class="text-xs text-slate-400">
                                             <span class="material-icons text-xs align-middle">info</span>
                                             LLM에게 전달할 추가 지시사항을 입력하세요. 입력 내용은 자동으로 브라우저에 저장되어 다음에도 사용할 수 있습니다.
@@ -146,7 +153,7 @@
                             </section>
 
                             <div class="flex items-center justify-between flex-wrap gap-3">
-                                <p class="text-xs text-slate-500" id="form-hint">영상 길이와 네트워크에 따라 다소 시간이 걸릴 수 있습니다.</p>
+                                <p class="text-xs text-slate-500" id="form-hint">영상/오디오 길이와 네트워크에 따라 다소 시간이 걸릴 수 있습니다.</p>
                                 <button type="submit" id="subtitle-submit-btn" class="flex min-w-[140px] items-center justify-center gap-2 rounded-md bg-[#0c77f2] px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-600 disabled:opacity-60 disabled:cursor-not-allowed">
                                     <span class="material-icons text-base hidden inline-flex items-center justify-center" id="subtitle-submit-spinner">autorenew</span>
                                     <span id="subtitle-submit-text">자막 생성 요청</span>

@@ -31,6 +31,8 @@ if TYPE_CHECKING:  # pragma: no cover
 
 logger = logging.getLogger(__name__)
 
+SUPPORTED_TRANSCRIPTION_MODES = {"transcribe", "translate", "whisper_only"}
+
 SUBTITLE_JOB_ROOT = os.path.join(BASE_DIR, "generated_subtitles")
 os.makedirs(SUBTITLE_JOB_ROOT, exist_ok=True)
 _HISTORY_STORAGE_PREFIX = "subtitle_job_history:"
@@ -604,6 +606,8 @@ class SubtitleJob:
     failed_segments: List[int] = field(default_factory=list)
     stop_requested: bool = False
     voice_override_path: Optional[str] = None
+    source_has_video: bool = True
+    source_has_audio: bool = True
 
     def progress(self) -> float:
         if self.total_segments <= 0:
@@ -626,6 +630,8 @@ class SubtitleJob:
             "target_language": self.target_language,
             "custom_prompt": self.custom_prompt,
             "model_name": self.model_name,
+            "source_has_video": self.source_has_video,
+            "source_has_audio": self.source_has_audio,
             "transcript_ready": bool(self.transcript_path and os.path.isfile(self.transcript_path)),
             "transcript_path": self.transcript_path,
             "created_at": self.created_at,
@@ -730,12 +736,12 @@ def _save_uploaded_file(uploaded_file: "FileStorage", dest_dir: str) -> str:
 def _prepare_source_path(job: SubtitleJob, youtube_url: Optional[str],
                          uploaded_path: Optional[str]) -> str:
     if uploaded_path:
-        job.append_log("업로드된 영상 파일을 사용합니다.")
+        job.append_log("업로드된 미디어 파일을 사용합니다.")
         return uploaded_path
     if youtube_url:
         job.append_log("YouTube 영상을 다운로드하는 중입니다.")
         return _download_youtube_video(youtube_url, os.path.join(job.output_dir, "download"))
-    raise ValueError("영상 파일 또는 YouTube 링크가 필요합니다.")
+    raise ValueError("영상 또는 오디오 파일, 혹은 YouTube 링크가 필요합니다.")
 
 
 def _merge_video_with_voice_track(video_path: str, audio_path: str, output_dir: str) -> str:
@@ -798,15 +804,16 @@ def start_job(
 ) -> Dict[str, Any]:
     if chunk_minutes <= 0:
         raise ValueError("청크 길이는 0보다 커야 합니다.")
-    if mode not in {"transcribe", "translate"}:
+    if mode not in SUPPORTED_TRANSCRIPTION_MODES:
         raise ValueError("지원하지 않는 전사 모드입니다.")
     if mode == "translate" and not target_language:
         raise ValueError("번역 모드에서는 번역 대상 언어가 필요합니다.")
-    if not os.environ.get("GOOGLE_API_KEY"):
+    requires_api_key = mode != "whisper_only"
+    if requires_api_key and not os.environ.get("GOOGLE_API_KEY"):
         raise ValueError("Google API Key가 설정되지 않았습니다.")
 
     if not (youtube_url or (uploaded_file and uploaded_file.filename)):
-        raise ValueError("영상 파일 또는 YouTube 링크 중 하나가 필요합니다.")
+        raise ValueError("영상 또는 오디오 파일, 혹은 YouTube 링크 중 하나가 필요합니다.")
 
     job_id = uuid.uuid4().hex
     output_dir = _ensure_dir(os.path.join(SUBTITLE_JOB_ROOT, job_id))
@@ -1038,24 +1045,35 @@ def _run_job(
     voice_path: Optional[str] = None,
 ) -> None:
     try:
-        _update_job(job, status="running", phase="source", message="영상 소스를 준비하는 중입니다.")
+        _update_job(job, status="running", phase="source", message="미디어 소스를 준비하는 중입니다.")
         job.source_path = _prepare_source_path(job, youtube_url, uploaded_path)
         job.append_log(f"소스 파일: {job.source_path}")
+        job.source_has_video = ffmpeg_module.has_video_stream(job.source_path)
+        job.source_has_audio = ffmpeg_module.has_audio_stream(job.source_path)
+        if not job.source_has_audio:
+            raise ValueError("오디오 트랙이 없는 미디어 파일은 지원되지 않습니다.")
+        media_type_label = "영상" if job.source_has_video else "오디오"
+        job.append_log(f"{media_type_label} 소스를 감지했습니다.")
 
         if voice_path:
-            job.append_log("업로드된 음성 파일로 영상 오디오를 교체합니다.")
-            try:
-                replaced_path = _merge_video_with_voice_track(
-                    job.source_path,
-                    voice_path,
-                    os.path.join(job.output_dir, "source"),
-                )
-                job.source_path = replaced_path
-                job.append_log("음성 교체가 완료되어 새 영상 파일을 사용합니다.")
-            except Exception as exc:
-                job.append_log(f"음성 교체 실패: {exc}. 원본 오디오로 계속 진행합니다.", level="warning")
+            if job.source_has_video:
+                job.append_log("업로드된 음성 파일로 영상 오디오를 교체합니다.")
+                try:
+                    replaced_path = _merge_video_with_voice_track(
+                        job.source_path,
+                        voice_path,
+                        os.path.join(job.output_dir, "source"),
+                    )
+                    job.source_path = replaced_path
+                    job.source_has_video = ffmpeg_module.has_video_stream(job.source_path)
+                    job.source_has_audio = ffmpeg_module.has_audio_stream(job.source_path)
+                    job.append_log("음성 교체가 완료되어 새 영상 파일을 사용합니다.")
+                except Exception as exc:
+                    job.append_log(f"음성 교체 실패: {exc}. 원본 오디오로 계속 진행합니다.", level="warning")
+            else:
+                job.append_log("오디오 전용 소스에서는 별도의 음성 교체를 지원하지 않습니다.", level="warning")
 
-        _update_job(job, phase="split", message="영상 분할을 시작합니다.")
+        _update_job(job, phase="split", message="미디어 분할을 시작합니다.")
         ffmpeg_module.register_ffmpeg_path()
 
         if srt_path:
@@ -1082,11 +1100,15 @@ def _run_job(
         job.append_log(f"{job.total_segments}개의 세그먼트가 생성되었습니다.")
 
         _update_job(job, phase="entries", message="기본 자막 엔트리를 준비합니다.")
-        if srt_path:
+        use_srt_entries = bool(srt_path) and job.mode != "whisper_only"
+        if use_srt_entries:
             base_entries = _load_entries_from_srt_file(srt_path)
             job.append_log(f"SRT 자막 엔트리 {len(base_entries)}개를 불러왔습니다.")
         else:
-            job.append_log("Whisper를 사용해 기본 자막 엔트리를 생성합니다.")
+            if srt_path and job.mode == "whisper_only":
+                job.append_log("Whisper-only 모드: 업로드된 SRT 대신 Whisper 전사 결과를 사용합니다.")
+            else:
+                job.append_log("Whisper를 사용해 기본 자막 엔트리를 생성합니다.")
             base_entries = _build_entries_from_whisper(job)
             job.append_log(f"Whisper 자막 엔트리 {len(base_entries)}개를 확보했습니다.")
         if not base_entries:
@@ -1094,82 +1116,136 @@ def _run_job(
         _initialize_job_entries(job, base_entries)
         job.append_log("자막 엔트리 초기화 완료.")
 
-        _update_job(job, phase="llm", message="LLM이 영상과 엔트리를 함께 분석합니다.")
-        client = GeminiClient(model=job.model_name, thinking_budget=-1)
-        client.start_chat()
-        last_segment_start_at: Optional[float] = None
-        task_label = "번역" if job.mode == "translate" else "전사"
-
-        for segment in job.segments:
+        if job.mode == "whisper_only":
+            job.append_log("Whisper-only 모드: LLM 없이 전사 결과만 사용합니다.")
+            _update_job(job, phase="whisper_only", message="Whisper 전사 결과를 정리하는 중입니다.")
+            for segment in job.segments:
+                if job.stop_requested:
+                    job.append_log("사용자 요청으로 작업을 중지합니다.", level="warning")
+                    _mark_segments_cancelled(job)
+                    _update_job(
+                        job,
+                        status="cancelled",
+                        phase="stopped",
+                        message="사용자 요청으로 작업이 중지되었습니다.",
+                    )
+                    return
+                segment_entries = _entries_for_segment(job, segment)
+                segment.transcript = [
+                    {
+                        "index": entry["index"],
+                        "start": entry["start"],
+                        "end": entry["end"],
+                        "text": entry.get("text", ""),
+                    }
+                    for entry in segment_entries
+                ]
+                if segment_entries:
+                    segment.message = f"Whisper 엔트리 {len(segment_entries)}개 적용"
+                else:
+                    segment.message = "해당 구간 전사 없음"
+                segment.status = "completed"
+                job.processed_segments += 1
+                job.updated_at = _now()
             if job.stop_requested:
                 job.append_log("사용자 요청으로 작업을 중지합니다.", level="warning")
                 _mark_segments_cancelled(job)
                 _update_job(job, status="cancelled", phase="stopped", message="사용자 요청으로 작업이 중지되었습니다.")
                 return
-            last_segment_start_at = _process_segment(
-                job,
-                client,
-                segment,
-                task_label=task_label,
-                last_segment_start_at=last_segment_start_at,
-                allow_processed_increment=True,
-                is_retry=False,
-            )
+            job.failed_segments.clear()
+        else:
+            _update_job(job, phase="llm", message="LLM이 영상과 엔트리를 함께 분석합니다.")
+            client = GeminiClient(model=job.model_name, thinking_budget=-1)
+            client.start_chat()
+            last_segment_start_at: Optional[float] = None
+            processing_label = "번역" if job.mode == "translate" else "전사"
 
-        if job.stop_requested:
-            job.append_log("사용자 요청으로 작업을 중지합니다.", level="warning")
-            _mark_segments_cancelled(job)
-            _update_job(job, status="cancelled", phase="stopped", message="사용자 요청으로 작업이 중지되었습니다.")
-            return
-
-        initial_failures = sorted(job.failed_segments)
-        if initial_failures:
-            failure_list_text = ", ".join(str(idx) for idx in initial_failures)
-            job.append_log(f"실패한 세그먼트 확인: {failure_list_text}", level="warning")
-            _update_job(job, phase="retry", message="실패한 세그먼트를 재시도하는 중입니다.")
-            for segment_index in initial_failures:
-                segment = next((seg for seg in job.segments if seg.index == segment_index), None)
-                if not segment:
-                    continue
+            for segment in job.segments:
                 if job.stop_requested:
-                    job.append_log("재시도 중 사용자 요청으로 작업을 중지합니다.", level="warning")
+                    job.append_log("사용자 요청으로 작업을 중지합니다.", level="warning")
                     _mark_segments_cancelled(job)
-                    _update_job(job, status="cancelled", phase="stopped", message="사용자 요청으로 작업이 중지되었습니다.")
+                    _update_job(
+                        job,
+                        status="cancelled",
+                        phase="stopped",
+                        message="사용자 요청으로 작업이 중지되었습니다.",
+                    )
                     return
                 last_segment_start_at = _process_segment(
                     job,
                     client,
                     segment,
-                    task_label=task_label,
+                    task_label=processing_label,
                     last_segment_start_at=last_segment_start_at,
-                    allow_processed_increment=False,
-                    is_retry=True,
+                    allow_processed_increment=True,
+                    is_retry=False,
                 )
+
             if job.stop_requested:
-                job.append_log("재시도 중 사용자 요청으로 작업을 중지합니다.", level="warning")
+                job.append_log("사용자 요청으로 작업을 중지합니다.", level="warning")
                 _mark_segments_cancelled(job)
                 _update_job(job, status="cancelled", phase="stopped", message="사용자 요청으로 작업이 중지되었습니다.")
                 return
-            if job.failed_segments:
-                remaining_text = ", ".join(str(idx) for idx in job.failed_segments)
-                job.append_log(f"재시도에도 실패한 세그먼트: {remaining_text}", level="warning")
-                job.message = "일부 세그먼트는 재시도에도 실패했습니다."
-            else:
-                job.append_log("실패한 세그먼트를 재시도하여 성공했습니다.")
-                job.message = "실패 세그먼트 재시도가 완료되었습니다."
-            job.updated_at = _now()
+
+            initial_failures = sorted(job.failed_segments)
+            if initial_failures:
+                failure_list_text = ", ".join(str(idx) for idx in initial_failures)
+                job.append_log(f"실패한 세그먼트 확인: {failure_list_text}", level="warning")
+                _update_job(job, phase="retry", message="실패한 세그먼트를 재시도하는 중입니다.")
+                for segment_index in initial_failures:
+                    segment = next((seg for seg in job.segments if seg.index == segment_index), None)
+                    if not segment:
+                        continue
+                    if job.stop_requested:
+                        job.append_log("재시도 중 사용자 요청으로 작업을 중지합니다.", level="warning")
+                        _mark_segments_cancelled(job)
+                        _update_job(
+                            job,
+                            status="cancelled",
+                            phase="stopped",
+                            message="사용자 요청으로 작업이 중지되었습니다.",
+                        )
+                        return
+                    last_segment_start_at = _process_segment(
+                        job,
+                        client,
+                        segment,
+                        task_label=processing_label,
+                        last_segment_start_at=last_segment_start_at,
+                        allow_processed_increment=False,
+                        is_retry=True,
+                    )
+                if job.stop_requested:
+                    job.append_log("재시도 중 사용자 요청으로 작업을 중지합니다.", level="warning")
+                    _mark_segments_cancelled(job)
+                    _update_job(job, status="cancelled", phase="stopped", message="사용자 요청으로 작업이 중지되었습니다.")
+                    return
+                if job.failed_segments:
+                    remaining_text = ", ".join(str(idx) for idx in job.failed_segments)
+                    job.append_log(f"재시도에도 실패한 세그먼트: {remaining_text}", level="warning")
+                    job.message = "일부 세그먼트는 재시도에도 실패했습니다."
+                else:
+                    job.append_log("실패한 세그먼트를 재시도하여 성공했습니다.")
+                    job.message = "실패 세그먼트 재시도가 완료되었습니다."
+                job.updated_at = _now()
 
         combined = sorted(job.transcript_entries, key=lambda item: item["start"])
         if not combined:
             job.append_log("최종 자막 엔트리가 없습니다.")
         output_path = os.path.join(job.output_dir, f"{job.job_id}.srt")
         job.transcript_path = _write_srt(combined, output_path)
+        if job.mode == "translate":
+            final_task_label = "번역"
+        elif job.mode == "whisper_only":
+            final_task_label = "Whisper 전사"
+        else:
+            final_task_label = "전사"
         if job.failed_segments:
             final_message = (
-                f"{task_label} 작업이 완료되었지만 {len(job.failed_segments)}개 세그먼트는 실패했습니다."
+                f"{final_task_label} 작업이 완료되었지만 {len(job.failed_segments)}개 세그먼트는 실패했습니다."
             )
         else:
-            final_message = f"{task_label} 작업이 완료되었습니다."
+            final_message = f"{final_task_label} 작업이 완료되었습니다."
         _update_job(job, status="completed", phase="finished", message=final_message)
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.exception("Subtitle job %s failed", job.job_id)

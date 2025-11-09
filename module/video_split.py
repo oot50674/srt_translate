@@ -11,7 +11,12 @@ from typing import Dict, Iterable, List, Sequence, Optional
 
 import torch
 
-from module.ffmpeg_module import get_duration_seconds, register_ffmpeg_path
+from module.ffmpeg_module import (
+    get_duration_seconds,
+    register_ffmpeg_path,
+    has_video_stream,
+    has_audio_stream,
+)
 from module.storage import get_value as storage_get_value
 from module.storage import set_value as storage_set_value
 
@@ -150,34 +155,60 @@ def _generate_output_path(output_dir: str, prefix: str, index: int, extension: s
     return os.path.join(output_dir, f"{prefix}_{index:03d}{extension}")
 
 
-def _cut_video_chunk(input_path: str, output_path: str, start: float, end: float) -> None:
+def _cut_media_chunk(
+    input_path: str,
+    output_path: str,
+    start: float,
+    end: float,
+    *,
+    include_video: bool,
+) -> None:
     register_ffmpeg_path()
     duration = max(end - start, 0.1)
-    cmd = [
-        "ffmpeg",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-y",
-        "-ss",
-        f"{start:.3f}",
-        "-i",
-        input_path,
-        "-t",
-        f"{duration:.3f}",
-        "-c:v",
-        "copy",
-        "-c:a",
-        "copy",
-        "-reset_timestamps",
-        "1",
-        output_path,
-    ]
+    if include_video:
+        cmd = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-ss",
+            f"{start:.3f}",
+            "-i",
+            input_path,
+            "-t",
+            f"{duration:.3f}",
+            "-c:v",
+            "copy",
+            "-c:a",
+            "copy",
+            "-reset_timestamps",
+            "1",
+            output_path,
+        ]
+    else:
+        cmd = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-ss",
+            f"{start:.3f}",
+            "-i",
+            input_path,
+            "-t",
+            f"{duration:.3f}",
+            "-c:a",
+            "copy",
+            "-vn",
+            output_path,
+        ]
     try:
         subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     except subprocess.CalledProcessError as exc:
         stderr = exc.stderr.decode("utf-8", errors="ignore")
-        raise RuntimeError(f"비디오 분할 실패: {stderr.strip()}") from exc
+        raise RuntimeError(f"미디어 분할 실패: {stderr.strip()}") from exc
 
 
 def _store_metadata(segments: Iterable[SegmentMetadata], storage_key: str) -> None:
@@ -198,6 +229,10 @@ def split_video_by_minutes(
     extension = os.path.splitext(input_path)[1] or ".mp4"
     max_duration = max(1.0, minutes_per_segment * 60.0)
     video_duration = get_duration_seconds(input_path)
+    source_has_video = has_video_stream(input_path)
+    source_has_audio = has_audio_stream(input_path)
+    if not source_has_audio:
+        raise ValueError("오디오 트랙이 없는 미디어는 분할할 수 없습니다.")
 
     audio_path = _extract_audio_for_vad(input_path)
     try:
@@ -224,7 +259,13 @@ def split_video_by_minutes(
             continue
 
         output_path = _generate_output_path(output_dir, prefix, idx, extension)
-        _cut_video_chunk(input_path, output_path, start, end)
+        _cut_media_chunk(
+            input_path,
+            output_path,
+            start,
+            end,
+            include_video=source_has_video,
+        )
         metadata.append(
             SegmentMetadata(
                 index=idx,

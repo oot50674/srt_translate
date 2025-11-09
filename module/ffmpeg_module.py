@@ -166,6 +166,48 @@ __all__.extend([
     "snapshot_at_times", "snapshots_from_youtube"
 ])
 
+
+def _has_stream(input_path: str, selector: str) -> bool:
+    """지정한 타입(selector)의 스트림이 존재하는지 확인합니다."""
+    register_ffmpeg_path()
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        selector,
+        "-show_entries",
+        "stream=codec_type",
+        "-of",
+        "csv=p=0",
+        input_path,
+    ]
+    try:
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+    except FileNotFoundError:
+        return False
+    if result.returncode != 0:
+        return False
+    return bool(result.stdout.decode().strip())
+
+
+def has_video_stream(input_path: str) -> bool:
+    """비디오 스트림 존재 여부를 반환합니다."""
+    return _has_stream(input_path, "v")
+
+
+def has_audio_stream(input_path: str) -> bool:
+    """오디오 스트림 존재 여부를 반환합니다."""
+    return _has_stream(input_path, "a")
+
+
+__all__.extend(["has_video_stream", "has_audio_stream"])
+
 if __name__ == "__main__":
     # 프로젝트 루트를 기준으로 기본 출력 디렉토리 설정
     try:

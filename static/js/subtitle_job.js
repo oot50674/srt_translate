@@ -67,9 +67,20 @@
             label: '청크 길이',
             value: `${job.chunk_minutes || 0}분`
         });
+        const isVideoSource = job.source_has_video !== false;
+        entries.push({
+            label: '소스 유형',
+            value: isVideoSource ? '영상' : '오디오'
+        });
+        let modeLabel = '전사';
+        if (job.mode === 'translate') {
+            modeLabel = `번역 (${job.target_language || '-'})`;
+        } else if (job.mode === 'whisper_only') {
+            modeLabel = 'Whisper 전사';
+        }
         entries.push({
             label: '모드',
-            value: job.mode === 'translate' ? `번역 (${job.target_language || '-'})` : '전사'
+            value: modeLabel
         });
         entries.push({
             label: '원본 소스',

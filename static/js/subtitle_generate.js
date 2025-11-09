@@ -2,6 +2,7 @@
     const form = document.getElementById('subtitle-generate-form');
     const modeRadios = document.querySelectorAll('input[name="transcription_mode"]');
     const translationLanguage = document.getElementById('translation-language');
+    const whisperOnlyNote = document.getElementById('whisper-only-note');
     const alertBox = document.getElementById('subtitle-generate-alert');
     const submitBtn = document.getElementById('subtitle-submit-btn');
     const submitSpinner = document.getElementById('subtitle-submit-spinner');
@@ -54,14 +55,23 @@
             submitText.textContent = isSubmitting ? '요청 보내는 중...' : '자막 생성 요청';
         }
         if (formHint) {
-            formHint.textContent = isSubmitting ? '서버에서 작업을 준비하고 있습니다...' : '영상 길이와 네트워크에 따라 다소 시간이 걸릴 수 있습니다.';
+            formHint.textContent = isSubmitting ? '서버에서 작업을 준비하고 있습니다...' : '영상/오디오 길이와 네트워크에 따라 다소 시간이 걸릴 수 있습니다.';
         }
     }
 
-    function toggleTranslationField() {
-        if (!translationLanguage) return;
-        const needsTranslation = Array.from(modeRadios).some(radio => radio.checked && radio.value === 'translate');
-        translationLanguage.classList.toggle('hidden', !needsTranslation);
+    function getSelectedMode() {
+        const selected = Array.from(modeRadios).find(radio => radio.checked);
+        return selected ? selected.value : 'transcribe';
+    }
+
+    function updateModeVisibility() {
+        const mode = getSelectedMode();
+        if (translationLanguage) {
+            translationLanguage.classList.toggle('hidden', mode !== 'translate');
+        }
+        if (whisperOnlyNote) {
+            whisperOnlyNote.classList.toggle('hidden', mode !== 'whisper_only');
+        }
     }
 
     function isVideoFile(filename) {
@@ -82,11 +92,11 @@
         if (!files || files.length === 0) return;
 
         // 기존에 업로드된 파일 확인
-        let existingVideoFile = videoFileInput?.files?.[0] || null;
+        const previousPrimary = videoFileInput?.files?.[0] || null;
         let existingSrtFile = srtFileInput?.files?.[0] || null;
         let existingVoiceFile = voiceFileInput?.files?.[0] || null;
 
-        let videoFile = existingVideoFile;
+        let videoFile = previousPrimary;
         let srtFile = existingSrtFile;
         let voiceFile = existingVoiceFile;
 
@@ -97,11 +107,22 @@
             } else if (isSrtFile(file.name)) {
                 srtFile = file;
             } else if (isAudioFile(file.name)) {
-                voiceFile = file;
+                if (!videoFile || !isVideoFile(videoFile.name)) {
+                    videoFile = file;
+                } else {
+                    voiceFile = file;
+                }
             }
         });
 
-        // DataTransfer 객체를 사용하여 각 input에 파일 할당
+        const primaryBecameVideo = Boolean(
+            previousPrimary &&
+            isAudioFile(previousPrimary.name) &&
+            videoFile &&
+            videoFile !== previousPrimary &&
+            isVideoFile(videoFile.name)
+        );
+
         if (videoFile) {
             const dt = new DataTransfer();
             dt.items.add(videoFile);
@@ -118,6 +139,11 @@
             const dt = new DataTransfer();
             dt.items.add(voiceFile);
             voiceFileInput.files = dt.files;
+        } else if (primaryBecameVideo && previousPrimary && voiceFileInput) {
+            const dt = new DataTransfer();
+            dt.items.add(previousPrimary);
+            voiceFileInput.files = dt.files;
+            voiceFile = previousPrimary;
         }
 
         // 파일 목록 UI 업데이트
@@ -137,10 +163,14 @@
         fileList.innerHTML = '';
 
         if (videoFile) {
+            const isAudioPrimary = !isVideoFile(videoFile.name) && isAudioFile(videoFile.name);
+            const primaryIcon = isAudioPrimary ? 'graphic_eq' : 'videocam';
+            const primaryIconClass = isAudioPrimary ? 'text-purple-600' : 'text-blue-600';
+            const primaryBgClass = isAudioPrimary ? 'border border-purple-200 bg-purple-50' : 'border border-blue-200 bg-blue-50';
             const videoItem = document.createElement('div');
-            videoItem.className = 'flex items-center gap-2 px-3 py-2 bg-blue-50 border border-blue-200 rounded-md';
+            videoItem.className = `flex items-center gap-2 px-3 py-2 rounded-md ${primaryBgClass}`;
             videoItem.innerHTML = `
-                <span class="material-icons text-blue-600">videocam</span>
+                <span class="material-icons ${primaryIconClass}">${primaryIcon}</span>
                 <span class="flex-1 text-sm text-slate-700 truncate">${videoFile.name}</span>
                 <button type="button" class="remove-video-btn text-slate-400 hover:text-slate-600">
                     <span class="material-icons text-lg">close</span>
@@ -194,16 +224,16 @@
     function validateForm() {
         const youtubeUrl = form.elements.namedItem('youtube_url')?.value.trim();
         const videoFileSelected = videoFileInput?.files && videoFileInput.files.length > 0;
-        const mode = Array.from(modeRadios).find(radio => radio.checked)?.value || 'transcribe';
+        const mode = getSelectedMode();
         const targetLanguage = form.elements.namedItem('target_language')?.value.trim();
         if (!youtubeUrl && !videoFileSelected) {
-            throw new Error('YouTube 링크 또는 영상 파일을 입력해 주세요.');
+            throw new Error('YouTube 링크 또는 영상/오디오 파일을 입력해 주세요.');
         }
 
         if (mode === 'translate' && !targetLanguage) {
             throw new Error('번역할 언어를 입력해 주세요.');
         }
-        if (missingApiKey) {
+        if (missingApiKey && mode !== 'whisper_only') {
             throw new Error('Google API Key가 설정되지 않았습니다.');
         }
     }
@@ -307,9 +337,9 @@
             const radio = document.querySelector(`input[name="transcription_mode"][value="${transcriptionMode}"]`);
             if (radio) {
                 radio.checked = true;
-                toggleTranslationField();
             }
         }
+        updateModeVisibility();
 
         // 번역 언어 로드
         const targetLanguage = getStorageValue('target_language');
@@ -343,8 +373,8 @@
 
     function saveFormValues() {
         // 전사 모드 저장
-        const checkedMode = Array.from(modeRadios).find(radio => radio.checked);
-        if (checkedMode) setStorageValue('transcription_mode', checkedMode.value);
+        const selectedMode = getSelectedMode();
+        if (selectedMode) setStorageValue('transcription_mode', selectedMode);
 
         // 번역 언어 저장
         const langInput = form.elements.namedItem('target_language');
@@ -409,7 +439,7 @@
         modeRadios.forEach(radio => {
             radio.addEventListener('change', () => {
                 saveFormValues();
-                toggleTranslationField();
+                updateModeVisibility();
             });
         });
 
@@ -441,6 +471,7 @@
     bindDropZone();
     bindFileSelect();
     bindFormValueStorage();
+    updateModeVisibility();
 
     form?.addEventListener('submit', submitForm);
 })();
