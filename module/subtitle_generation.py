@@ -171,51 +171,32 @@ def _send_gemini_with_retry(
         except genai_errors.ClientError as exc:
             last_error = exc
             error_text = str(exc)
-            if "RESOURCE_EXHAUSTED" in error_text.upper():
-                retry_delay = _get_retry_delay_seconds_from_error(exc)
-                wait_seconds = max(5.0, (retry_delay or 0.0) + 5.0)
-                warning_text = (
-                    f"{context} 중 Gemini 쿼터 제한에 도달했습니다. "
-                    f"{wait_seconds:.1f}초 후 재시도합니다."
-                )
-                if job:
-                    job.append_log(warning_text, level="warning")
-                else:
-                    logger.warning(warning_text)
-                time.sleep(wait_seconds)
-                continue
-
-            if not non_resource_retry_done:
-                non_resource_retry_done = True
-                retry_delay = _get_retry_delay_seconds_from_error(exc)
-                wait_seconds = max(5.0, (retry_delay or 0.0) + 5.0)
-                warning_text = (
-                    f"{context} 중 오류가 발생했습니다: {error_text}. "
-                    f"{wait_seconds:.1f}초 후 재시도합니다."
-                )
-                if job:
-                    job.append_log(warning_text, level="warning")
-                else:
-                    logger.warning(warning_text)
-                time.sleep(wait_seconds)
-                continue
-            raise
+            non_resource_retry_done = True
+            retry_delay = _get_retry_delay_seconds_from_error(exc)
+            wait_seconds = max(5.0, (retry_delay or 0.0) + 5.0)
+            warning_text = (
+                f"{context} 중 오류가 발생했습니다: {error_text}. "
+                f"{wait_seconds:.1f}초 후 재시도합니다."
+            )
+            logger.warning(warning_text)
+            try:
+                job.append_log(warning_text, level="warning")
+            except Exception:
+                pass
+            time.sleep(wait_seconds)
+            continue
         except Exception as exc:
             last_error = exc
-            if not non_resource_retry_done:
-                non_resource_retry_done = True
-                wait_seconds = 60.0
-                warning_text = (
-                    f"{context} 중 알 수 없는 오류가 발생했습니다: {exc}. "
-                    f"{wait_seconds:.1f}초 후 재시도합니다."
-                )
-                if job:
-                    job.append_log(warning_text, level="warning")
-                else:
-                    logger.warning(warning_text)
-                time.sleep(wait_seconds)
-                continue
-            raise
+            # 일반 예외는 재시도하지 않고 다음 엔트리로 넘어갑니다.
+            warning_text = (
+                f"{context} 중 알 수 없는 오류가 발생했습니다: {exc}. "
+            )
+            logger.warning(warning_text)
+            try:
+                job.append_log(warning_text, level="warning")
+            except Exception:
+                pass
+            break
     if last_error:
         raise last_error
     raise RuntimeError("Gemini 요청 재시도에 실패했습니다.")
