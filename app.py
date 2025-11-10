@@ -14,6 +14,7 @@ from module.subtitle_generation import (
     get_transcript_path as get_subtitle_transcript_path,
     get_segment_path as get_subtitle_segment_path,
     request_stop as stop_subtitle_job,
+    retry_segments as retry_subtitle_segments_job,
 )
 from module.subtitle_sync import sync_subtitles, export_srt, SyncConfig
 from module.database_module import (
@@ -36,12 +37,19 @@ from utils import (
     save_api_key_to_env,
     save_history_log,
     translate_srt_stream,
+    cleanup_old_files,
 )
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+
+# 서버 기동 시 오래된 생성물(영상/스냅샷/로그)을 정리합니다. 기본값: 3일
+try:
+    cleanup_old_files(days=3)
+except Exception:
+    logger.exception("서버 시작 시 cleanup_old_files 실행 중 예외가 발생했습니다.")
 
 # .env 로드 설정
 ENV_PATH = os.path.join(BASE_DIR, '.env')
@@ -225,6 +233,22 @@ def api_stop_subtitle_generation_job(job_id: str):
     if not stop_subtitle_job(job_id):
         return jsonify({'error': '중지할 작업을 찾을 수 없거나 이미 종료되었습니다.'}), 400
     return jsonify({'status': 'stopping'})
+
+
+@app.route('/api/subtitle/jobs/<job_id>/retry', methods=['POST'])
+def api_retry_subtitle_segments(job_id: str):
+    data = request.get_json(silent=True) or {}
+    segments = data.get('segments')
+    if not isinstance(segments, list) or not segments:
+        return jsonify({'error': '재시도할 세그먼트를 선택해 주세요.'}), 400
+    try:
+        job = retry_subtitle_segments_job(job_id, segments)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    except Exception:
+        logger.exception("Failed to retry subtitle segments")
+        return jsonify({'error': '세그먼트 재시도 요청을 처리하지 못했습니다.'}), 500
+    return jsonify({'status': 'retrying', 'job': job})
 
 @app.route('/api/jobs', methods=['POST'])
 def api_create_job():

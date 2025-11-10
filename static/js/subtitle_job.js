@@ -34,9 +34,13 @@
     const refreshBtn = document.getElementById('refresh-btn');
     const downloadSrtLink = document.getElementById('download-srt');
     const stopBtn = document.getElementById('stop-job-btn');
+    const retrySelectedBtn = document.getElementById('retry-selected-btn');
 
     let pollTimer = null;
     let terminalReached = false;
+    let latestJobData = null;
+    const selectedSegments = new Set();
+    const RETRY_ALLOWED_STATES = new Set(['completed', 'failed']);
 
     function setAlert(message, type = 'info') {
         if (!alertBox) return;
@@ -58,6 +62,10 @@
         if (!value && value !== 0) return '-';
         const date = new Date(value * 1000);
         return date.toLocaleTimeString();
+    }
+
+    function canRetry(job) {
+        return Boolean(job && RETRY_ALLOWED_STATES.has(job.status) && !job.stop_requested);
     }
 
     function renderMeta(job) {
@@ -98,12 +106,28 @@
         `).join('');
     }
 
+    function syncSegmentSelection(job) {
+        if (!canRetry(job)) {
+            selectedSegments.clear();
+            return;
+        }
+        const available = new Set((job.segments || []).map(seg => seg.index));
+        Array.from(selectedSegments).forEach(idx => {
+            if (!available.has(idx)) {
+                selectedSegments.delete(idx);
+            }
+        });
+    }
+
     function renderSegments(segments, job) {
+        syncSegmentSelection(job);
+        const canRetryNow = canRetry(job);
         if (!segmentsContainer) return;
         if (!segments || !segments.length) {
             segmentsPlaceholder?.classList.remove('hidden');
             segmentsContainer.innerHTML = '';
             segmentCounter.textContent = '';
+            updateRetryButton(job);
             return;
         }
         segmentCounter.textContent = `${job.processed_segments}/${job.total_segments} 완료`;
@@ -117,12 +141,26 @@
             const downloadClasses = segment.download_available
                 ? 'rounded-md border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors'
                 : 'rounded-md border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-400 pointer-events-none opacity-60';
+            const checkboxId = `segment-select-${segment.index}`;
+            const isChecked = selectedSegments.has(segment.index);
+            const checkboxAttrs = [
+                `type="checkbox"`,
+                `class="segment-select-checkbox h-4 w-4 text-[#0c77f2]"`,
+                `data-segment-index="${segment.index}"`,
+                `id="${checkboxId}"`,
+                `aria-label="세그먼트 #${segment.index} 재시도 선택"`,
+            ];
+            if (isChecked) checkboxAttrs.push('checked');
+            if (!canRetryNow) checkboxAttrs.push('disabled');
             return `
                 <div class="rounded-xl border border-slate-200 p-5 flex flex-col gap-2 bg-white">
-                    <div class="flex items-center justify-between">
-                        <div>
-                            <p class="font-semibold text-slate-900">세그먼트 #${segment.index}</p>
-                            <p class="text-xs text-slate-500">${segment.start_time.toFixed(1)}s ~ ${segment.end_time.toFixed(1)}s · ${speechInfo}</p>
+                    <div class="flex items-start justify-between gap-3">
+                        <div class="flex items-start gap-3">
+                            <input ${checkboxAttrs.join(' ')} />
+                            <div>
+                                <p class="font-semibold text-slate-900">세그먼트 #${segment.index}</p>
+                                <p class="text-xs text-slate-500">${segment.start_time.toFixed(1)}s ~ ${segment.end_time.toFixed(1)}s · ${speechInfo}</p>
+                            </div>
                         </div>
                         <span class="text-xs font-semibold px-3 py-1 rounded-full ${badgeStyle}">${segment.status}</span>
                     </div>
@@ -135,6 +173,19 @@
                 </div>
             `;
         }).join('');
+        segmentsContainer.querySelectorAll('.segment-select-checkbox').forEach(checkbox => {
+            checkbox.addEventListener('change', () => {
+                const idx = Number(checkbox.dataset.segmentIndex);
+                if (Number.isNaN(idx)) return;
+                if (checkbox.checked) {
+                    selectedSegments.add(idx);
+                } else {
+                    selectedSegments.delete(idx);
+                }
+                updateRetryButton(job);
+            });
+        });
+        updateRetryButton(job);
     }
 
     function renderLogs(logs) {
@@ -185,7 +236,22 @@
         }
     }
 
+    function updateRetryButton(job) {
+        if (!retrySelectedBtn) return;
+        const can = canRetry(job);
+        const selectionCount = selectedSegments.size;
+        retrySelectedBtn.disabled = !can || selectionCount === 0;
+        const baseText = selectionCount > 0 ? `선택 세그먼트 재시도 (${selectionCount})` : '선택 세그먼트 재시도';
+        retrySelectedBtn.textContent = baseText;
+        if (!can) {
+            retrySelectedBtn.classList.add('opacity-60', 'cursor-not-allowed');
+        } else {
+            retrySelectedBtn.classList.remove('opacity-60', 'cursor-not-allowed');
+        }
+    }
+
     function updateJob(job) {
+        latestJobData = job;
         const percent = Math.round((job.progress || 0) * 100);
         progressText.textContent = `${percent}%`;
         progressBar.style.width = `${percent}%`;
@@ -198,6 +264,7 @@
         renderLogs(job.logs);
         toggleDownload(job);
         toggleStopButton(job);
+        updateRetryButton(job);
 
         if (job.status === 'failed' && job.error) {
             setAlert(job.error, 'error');
@@ -265,6 +332,38 @@
             stopBtn.textContent = '작업 중지';
             stopBtn.classList.remove('opacity-60', 'cursor-not-allowed');
             setAlert(err.message || '작업 중지 요청에 실패했습니다.', 'error');
+        }
+    });
+
+    retrySelectedBtn?.addEventListener('click', async () => {
+        if (!latestJobData) return;
+        if (retrySelectedBtn.disabled) return;
+        if (selectedSegments.size === 0) {
+            setAlert('재시도할 세그먼트를 선택해 주세요.', 'warning');
+            return;
+        }
+        const segments = Array.from(selectedSegments).sort((a, b) => a - b);
+        retrySelectedBtn.disabled = true;
+        retrySelectedBtn.textContent = '재시도 요청 중...';
+        try {
+            const res = await fetch(`/api/subtitle/jobs/${encodeURIComponent(jobId)}/retry`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ segments })
+            });
+            const payload = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                throw new Error(payload.error || '세그먼트 재시도 요청에 실패했습니다.');
+            }
+            selectedSegments.clear();
+            setAlert('선택한 세그먼트 재시도 요청을 보냈습니다.', 'success');
+            if (pollTimer) clearTimeout(pollTimer);
+            terminalReached = false;
+            fetchJob();
+        } catch (err) {
+            console.error(err);
+            setAlert(err.message || '세그먼트 재시도 요청에 실패했습니다.', 'error');
+            updateRetryButton(latestJobData);
         }
     });
 

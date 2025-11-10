@@ -13,7 +13,7 @@ import unicodedata
 import uuid
 import subprocess
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, TYPE_CHECKING
 
 from yt_dlp import YoutubeDL
 
@@ -1037,6 +1037,136 @@ def _mark_segments_cancelled(job: SubtitleJob) -> None:
             segment.message = "사용자 요청으로 중지됨"
 
 
+def _get_segment_by_index(job: SubtitleJob, segment_index: int) -> Optional[SegmentState]:
+    for segment in job.segments:
+        if segment.index == segment_index:
+            return segment
+    return None
+
+
+def _normalize_segment_indices(job: SubtitleJob, indices: Iterable[Any]) -> List[int]:
+    valid_indices = {segment.index for segment in job.segments}
+    normalized: List[int] = []
+    seen: Set[int] = set()
+    for raw in indices:
+        try:
+            idx = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if idx in seen:
+            continue
+        if idx in valid_indices:
+            normalized.append(idx)
+            seen.add(idx)
+    normalized.sort()
+    return normalized
+
+
+def _retry_segments_whisper(job: SubtitleJob, target_indices: List[int]) -> None:
+    for idx in target_indices:
+        if job.stop_requested:
+            return
+        segment = _get_segment_by_index(job, idx)
+        if not segment:
+            continue
+        segment_entries = _entries_for_segment(job, segment)
+        segment.transcript = [
+            {
+                "index": entry["index"],
+                "start": entry["start"],
+                "end": entry["end"],
+                "text": entry.get("text", ""),
+            }
+            for entry in segment_entries
+        ]
+        if segment_entries:
+            segment.message = f"수동 재시도: Whisper 엔트리 {len(segment_entries)}개 적용"
+        else:
+            segment.message = "수동 재시도: 해당 구간 전사 없음"
+        segment.status = "completed"
+        if segment.index in job.failed_segments:
+            job.failed_segments.remove(segment.index)
+        job.append_log(f"{segment.index}번 세그먼트 Whisper 재적용 완료")
+        job.updated_at = _now()
+
+
+def _retry_segments_worker(job: SubtitleJob, target_indices: List[int]) -> None:
+    try:
+        _reset_saved_history(job.job_id)
+        if job.mode == "whisper_only":
+            _retry_segments_whisper(job, target_indices)
+        else:
+            client = GeminiClient(model=job.model_name, thinking_budget=-1)
+            client.start_chat()
+            last_segment_start_at: Optional[float] = None
+            processing_label = "번역" if job.mode == "translate" else "전사"
+            for segment_index in target_indices:
+                if job.stop_requested:
+                    break
+                segment = _get_segment_by_index(job, segment_index)
+                if not segment:
+                    continue
+                last_segment_start_at = _process_segment(
+                    job,
+                    client,
+                    segment,
+                    task_label=processing_label,
+                    last_segment_start_at=last_segment_start_at,
+                    allow_processed_increment=False,
+                    is_retry=True,
+                )
+            if job.stop_requested:
+                job.append_log("재시도 중 사용자 요청으로 작업을 중지합니다.", level="warning")
+                _mark_segments_cancelled(job)
+                _update_job(
+                    job,
+                    status="cancelled",
+                    phase="stopped",
+                    message="사용자 요청으로 재시도가 중지되었습니다.",
+                )
+                return
+        if job.failed_segments:
+            failure_list_text = ", ".join(str(idx) for idx in sorted(job.failed_segments))
+            job.append_log(f"재시도 후에도 실패한 세그먼트: {failure_list_text}", level="warning")
+            message = f"선택 세그먼트를 재시도했지만 {len(job.failed_segments)}개 세그먼트는 여전히 실패했습니다."
+        else:
+            message = "선택한 세그먼트 재시도를 완료했습니다."
+        _update_job(job, status="completed", phase="finished", message=message)
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.exception("Manual retry for job %s failed", job.job_id)
+        _update_job(
+            job,
+            status="failed",
+            phase="error",
+            message="세그먼트 재시도 중 오류가 발생했습니다.",
+            error=str(exc),
+        )
+    finally:
+        job.stop_requested = False
+        _reset_saved_history(job.job_id)
+
+
+def retry_segments(job_id: str, segment_indices: Iterable[Any]) -> Dict[str, Any]:
+    if not segment_indices:
+        raise ValueError("재시도할 세그먼트를 선택해 주세요.")
+    with _LOCK:
+        job = _JOBS.get(job_id)
+        if not job:
+            raise ValueError("해당 작업을 찾을 수 없습니다.")
+        if job.status not in {"completed", "failed"}:
+            raise ValueError("작업이 완료된 후에만 세그먼트를 재시도할 수 있습니다.")
+        normalized_indices = _normalize_segment_indices(job, segment_indices)
+        if not normalized_indices:
+            raise ValueError("재시도할 세그먼트를 찾지 못했습니다.")
+        job.stop_requested = False
+        indices_text = ", ".join(str(idx) for idx in normalized_indices)
+        job.append_log(f"선택 세그먼트 재시도 요청: {indices_text}")
+        _update_job(job, status="running", phase="manual_retry", message="선택한 세그먼트를 재시도하는 중입니다.")
+    thread = threading.Thread(target=_retry_segments_worker, args=(job, normalized_indices), daemon=True)
+    thread.start()
+    return job.to_dict()
+
+
 def _run_job(
     job: SubtitleJob,
     youtube_url: Optional[str],
@@ -1187,48 +1317,6 @@ def _run_job(
                 _update_job(job, status="cancelled", phase="stopped", message="사용자 요청으로 작업이 중지되었습니다.")
                 return
 
-            initial_failures = sorted(job.failed_segments)
-            if initial_failures:
-                failure_list_text = ", ".join(str(idx) for idx in initial_failures)
-                job.append_log(f"실패한 세그먼트 확인: {failure_list_text}", level="warning")
-                _update_job(job, phase="retry", message="실패한 세그먼트를 재시도하는 중입니다.")
-                for segment_index in initial_failures:
-                    segment = next((seg for seg in job.segments if seg.index == segment_index), None)
-                    if not segment:
-                        continue
-                    if job.stop_requested:
-                        job.append_log("재시도 중 사용자 요청으로 작업을 중지합니다.", level="warning")
-                        _mark_segments_cancelled(job)
-                        _update_job(
-                            job,
-                            status="cancelled",
-                            phase="stopped",
-                            message="사용자 요청으로 작업이 중지되었습니다.",
-                        )
-                        return
-                    last_segment_start_at = _process_segment(
-                        job,
-                        client,
-                        segment,
-                        task_label=processing_label,
-                        last_segment_start_at=last_segment_start_at,
-                        allow_processed_increment=False,
-                        is_retry=True,
-                    )
-                if job.stop_requested:
-                    job.append_log("재시도 중 사용자 요청으로 작업을 중지합니다.", level="warning")
-                    _mark_segments_cancelled(job)
-                    _update_job(job, status="cancelled", phase="stopped", message="사용자 요청으로 작업이 중지되었습니다.")
-                    return
-                if job.failed_segments:
-                    remaining_text = ", ".join(str(idx) for idx in job.failed_segments)
-                    job.append_log(f"재시도에도 실패한 세그먼트: {remaining_text}", level="warning")
-                    job.message = "일부 세그먼트는 재시도에도 실패했습니다."
-                else:
-                    job.append_log("실패한 세그먼트를 재시도하여 성공했습니다.")
-                    job.message = "실패 세그먼트 재시도가 완료되었습니다."
-                job.updated_at = _now()
-
         combined = sorted(job.transcript_entries, key=lambda item: item["start"])
         if not combined:
             job.append_log("최종 자막 엔트리가 없습니다.")
@@ -1241,6 +1329,8 @@ def _run_job(
         else:
             final_task_label = "전사"
         if job.failed_segments:
+            failure_list_text = ", ".join(str(idx) for idx in sorted(job.failed_segments))
+            job.append_log(f"실패한 세그먼트: {failure_list_text}", level="warning")
             final_message = (
                 f"{final_task_label} 작업이 완료되었지만 {len(job.failed_segments)}개 세그먼트는 실패했습니다."
             )
@@ -1260,4 +1350,5 @@ __all__ = [
     "get_transcript_path",
     "get_segment_path",
     "request_stop",
+    "retry_segments",
 ]

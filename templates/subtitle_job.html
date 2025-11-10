@@ -70,9 +70,14 @@
                     </div>
 
                     <div class="bg-white shadow-xl rounded-xl p-6">
-                        <div class="flex items-center justify-between">
+                        <div class="flex flex-wrap items-center justify-between gap-3">
                             <h2 class="text-xl font-semibold text-slate-900">세그먼트 상태</h2>
-                            <span id="segment-counter" class="text-sm text-slate-500"></span>
+                            <div class="flex items-center gap-3">
+                                <span id="segment-counter" class="text-sm text-slate-500"></span>
+                                <button id="retry-selected-btn" type="button" class="rounded-md border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 transition-colors disabled:opacity-60 disabled:cursor-not-allowed" disabled>
+                                    선택 세그먼트 재시도
+                                </button>
+                            </div>
                         </div>
                         <div id="segments-container" class="mt-4 grid grid-cols-1 gap-4"></div>
                         <div id="segments-placeholder" class="text-sm text-slate-500 rounded-lg border border-dashed border-slate-200 py-6 text-center">

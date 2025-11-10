@@ -6,6 +6,7 @@ import re
 from typing import Optional, Dict, List, Any
 from dotenv import set_key
 from datetime import datetime
+import shutil
 
 from constants import HISTORY_LOG_DIR, SNAPSHOT_ROOT_DIR, DEFAULT_CONTEXT_KEEP_RECENT, BASE_DIR
 from module import ffmpeg_module
@@ -108,6 +109,77 @@ def save_history_log(client: GeminiClient, job_id: Optional[str] = None) -> None
         )
     except Exception as exc:
         logger.error("대화 히스토리 로그 저장 실패: %s", exc)
+
+
+def cleanup_old_files(days: int = 3) -> None:
+    """지정한 일수(days)보다 오래된 생성물(영상/음성/스냅샷/히스토리 로그)을 삭제합니다.
+
+    - `generated_subtitles/` 하위 작업 디렉터리를 기준으로 삭제합니다.
+    - `SNAPSHOT_ROOT_DIR`(스냅샷 세션 디렉터리)와 `HISTORY_LOG_DIR`(히스토리 로그 파일)도 정리합니다.
+    이 함수는 안전성을 위해 개별 항목 삭제 실패를 무시하고 에러를 로깅합니다.
+    """
+    try:
+        cutoff_ts = time.time() - float(days) * 86400.0
+
+        # generated_subtitles 루트 (프로젝트 기준)
+        from constants import BASE_DIR
+        job_root = os.path.join(BASE_DIR, "generated_subtitles")
+        if os.path.isdir(job_root):
+            for entry in os.listdir(job_root):
+                path = os.path.join(job_root, entry)
+                try:
+                    mtime = os.path.getmtime(path)
+                    if mtime < cutoff_ts:
+                        if os.path.isdir(path):
+                            shutil.rmtree(path)
+                        else:
+                            os.remove(path)
+                        logger.info("오래된 작업 삭제: %s", path)
+                except Exception as exc:
+                    logger.exception("오래된 작업 삭제 실패: %s (%s)", path, exc)
+
+        # snapshots 디렉터리 (세션별 폴더 삭제)
+        try:
+            snap_root = SNAPSHOT_ROOT_DIR
+            if os.path.isdir(snap_root):
+                for entry in os.listdir(snap_root):
+                    path = os.path.join(snap_root, entry)
+                    try:
+                        mtime = os.path.getmtime(path)
+                        if mtime < cutoff_ts:
+                            if os.path.isdir(path):
+                                shutil.rmtree(path)
+                            else:
+                                os.remove(path)
+                            logger.info("오래된 스냅샷 삭제: %s", path)
+                    except Exception as exc:
+                        logger.exception("오래된 스냅샷 삭제 실패: %s (%s)", path, exc)
+        except NameError:
+            # SNAPSHOT_ROOT_DIR가 정의되어 있지 않으면 무시
+            pass
+
+        # 히스토리 로그 파일 정리
+        try:
+            logs_root = HISTORY_LOG_DIR
+            if os.path.isdir(logs_root):
+                for entry in os.listdir(logs_root):
+                    path = os.path.join(logs_root, entry)
+                    try:
+                        mtime = os.path.getmtime(path)
+                        if mtime < cutoff_ts:
+                            if os.path.isdir(path):
+                                shutil.rmtree(path)
+                            else:
+                                os.remove(path)
+                            logger.info("오래된 로그 삭제: %s", path)
+                    except Exception as exc:
+                        logger.exception("오래된 로그 삭제 실패: %s (%s)", path, exc)
+        except NameError:
+            # HISTORY_LOG_DIR가 정의되어 있지 않으면 무시
+            pass
+
+    except Exception as exc:
+        logger.exception("cleanup_old_files 실패: %s", exc)
 
 def translate_srt_stream(content: str, client, target_lang: str = '한국어', batch_size: int = 10,
                          user_prompt: str = '', thinking_budget: int = 0, stop_flag = None,
