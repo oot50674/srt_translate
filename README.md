@@ -1,7 +1,7 @@
 # 자막 번역기 (SRT Translator)
 Flask 기반 AI 자막 번역 & 생성 웹 애플리케이션
 
-<img width="1711" height="1228" alt="image" src="https://github.com/user-attachments/assets/053144d0-d2fb-4546-85b9-bff13f411acb" />
+<img width="1430" height="1279" alt="image" src="https://github.com/user-attachments/assets/eccaa152-1bd5-42e0-b023-674104111e86" />
 
 업로드 화면<br><br>
 
