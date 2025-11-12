@@ -2,8 +2,50 @@
 from __future__ import annotations
 
 from typing import Dict, List
+import os
+import tempfile
+import subprocess
+import logging
 
 import torch
+
+logger = logging.getLogger(__name__)
+
+
+def _extract_audio_to_wav(input_path: str, output_path: str) -> None:
+    """비디오 파일에서 오디오를 WAV 형식으로 추출합니다.
+
+    Args:
+        input_path: 입력 비디오/오디오 파일 경로
+        output_path: 출력 WAV 파일 경로
+
+    Raises:
+        RuntimeError: FFmpeg 실행 실패 시
+    """
+    cmd = [
+        "ffmpeg",
+        "-i", input_path,
+        "-vn",  # 비디오 스트림 제외
+        "-acodec", "pcm_s16le",  # 16-bit PCM
+        "-ar", "16000",  # 16kHz 샘플링 레이트 (Silero VAD 기본값)
+        "-ac", "1",  # 모노
+        "-y",  # 덮어쓰기
+        output_path
+    ]
+
+    try:
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True
+        )
+        logger.debug(f"오디오 추출 완료: {input_path} -> {output_path}")
+    except subprocess.CalledProcessError as e:
+        error_msg = e.stderr.decode() if e.stderr else str(e)
+        raise RuntimeError(f"오디오 추출 실패: {error_msg}") from e
+    except FileNotFoundError:
+        raise RuntimeError("FFmpeg를 찾을 수 없습니다. FFmpeg가 설치되어 있는지 확인하세요.") from None
 
 
 class SileroVAD:
@@ -54,10 +96,40 @@ class SileroVAD:
             VADIterator,
             collect_chunks,
         ) = self.utils
+
+        # 비디오 파일 확장자 확인
+        video_extensions = {'.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm', '.m4v'}
+        file_ext = os.path.splitext(audio_path)[1].lower()
+
+        # 비디오 파일인 경우 오디오 추출
+        temp_wav_path = None
+        if file_ext in video_extensions:
+            logger.info(f"비디오 파일 감지됨 ({file_ext}), 오디오 추출 중...")
+            temp_wav_path = tempfile.mktemp(suffix='.wav')
+            try:
+                _extract_audio_to_wav(audio_path, temp_wav_path)
+                audio_path_to_read = temp_wav_path
+            except Exception as exc:
+                if temp_wav_path and os.path.exists(temp_wav_path):
+                    os.remove(temp_wav_path)
+                raise RuntimeError(f"비디오에서 오디오 추출 실패: {exc}") from exc
+        else:
+            audio_path_to_read = audio_path
+
         try:
-            wav = read_audio(audio_path, sampling_rate=self.sampling_rate)
+            wav = read_audio(audio_path_to_read, sampling_rate=self.sampling_rate)
         except Exception as exc:
+            if temp_wav_path and os.path.exists(temp_wav_path):
+                os.remove(temp_wav_path)
             raise RuntimeError(f"오디오 파일 읽기 실패: {exc}") from exc
+        finally:
+            # 임시 WAV 파일 정리
+            if temp_wav_path and os.path.exists(temp_wav_path):
+                try:
+                    os.remove(temp_wav_path)
+                    logger.debug(f"임시 파일 삭제: {temp_wav_path}")
+                except Exception as e:
+                    logger.warning(f"임시 파일 삭제 실패: {e}")
 
         return get_speech_timestamps(
             wav,

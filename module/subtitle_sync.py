@@ -50,6 +50,10 @@ class SyncConfig:
     # 내부 엔트리 처리 모드
     entry_mode: str = "edge-only"  # "edge-only" or "proportional"
 
+    # 겹침 보정 설정
+    fix_overlaps: bool = True  # 겹침 자동 보정 활성화
+    min_gap_ms: int = 10  # 엔트리 간 최소 간격 (밀리초)
+
 
 @dataclass
 class SubtitleEntry:
@@ -512,6 +516,88 @@ def apply_chunk_correction(
     return corrected_entries
 
 
+def fix_entry_overlaps(
+    entries: List[SubtitleEntry],
+    config: SyncConfig
+) -> Tuple[List[SubtitleEntry], int]:
+    """인접한 엔트리 간 겹침을 자동으로 보정
+
+    Args:
+        entries: 자막 엔트리 리스트 (index 순으로 정렬되어야 함)
+        config: 싱크 설정
+
+    Returns:
+        (보정된 엔트리 리스트, 보정된 겹침 개수) 튜플
+    """
+    if not config.fix_overlaps or len(entries) < 2:
+        return entries, 0
+
+    # index 순으로 정렬
+    sorted_entries = sorted(entries, key=lambda e: e.index)
+    fixed_entries = []
+    overlaps_fixed = 0
+
+    for i, entry in enumerate(sorted_entries):
+        # 현재 엔트리 복사
+        current = SubtitleEntry(
+            index=entry.index,
+            start_ms=entry.start_ms,
+            end_ms=entry.end_ms,
+            text=entry.text
+        )
+
+        # 이전 엔트리가 있고, 현재 엔트리와 겹치는지 확인
+        if i > 0:
+            prev_entry = fixed_entries[-1]
+
+            # 겹침 감지: 이전 엔트리의 끝이 현재 엔트리의 시작보다 늦음
+            if prev_entry.end_ms > current.start_ms:
+                overlaps_fixed += 1
+                overlap_ms = prev_entry.end_ms - current.start_ms
+
+                logger.debug(
+                    f"겹침 감지 (엔트리 {prev_entry.index}-{current.index}): "
+                    f"{overlap_ms:.0f}ms 겹침"
+                )
+
+                # 중간 지점 계산
+                mid_point = (prev_entry.end_ms + current.start_ms) / 2
+
+                # 최소 간격 적용
+                half_gap = config.min_gap_ms / 2
+
+                # 이전 엔트리의 끝을 중간점 - 간격/2로 설정
+                new_prev_end = mid_point - half_gap
+                # 현재 엔트리의 시작을 중간점 + 간격/2로 설정
+                new_current_start = mid_point + half_gap
+
+                # 최소 엔트리 길이 보장
+                if new_prev_end - prev_entry.start_ms < config.min_entry_duration_ms:
+                    # 이전 엔트리가 너무 짧아지는 경우
+                    new_prev_end = prev_entry.start_ms + config.min_entry_duration_ms
+                    new_current_start = new_prev_end + config.min_gap_ms
+
+                if current.end_ms - new_current_start < config.min_entry_duration_ms:
+                    # 현재 엔트리가 너무 짧아지는 경우
+                    new_current_start = current.end_ms - config.min_entry_duration_ms
+                    new_prev_end = new_current_start - config.min_gap_ms
+
+                # 보정 적용
+                prev_entry.end_ms = max(prev_entry.start_ms + config.min_entry_duration_ms, new_prev_end)
+                current.start_ms = min(current.end_ms - config.min_entry_duration_ms, new_current_start)
+
+                logger.debug(
+                    f"겹침 보정 완료: 이전 엔트리 끝={prev_entry.end_ms:.0f}ms, "
+                    f"현재 엔트리 시작={current.start_ms:.0f}ms, "
+                    f"간격={current.start_ms - prev_entry.end_ms:.0f}ms"
+                )
+
+        fixed_entries.append(current)
+
+    logger.info(f"겹침 보정: {overlaps_fixed}개 겹침 수정됨")
+    return fixed_entries, overlaps_fixed
+
+
 def sync_subtitles(
     subtitles: List[Dict],
     audio_path: str,
@@ -592,7 +678,11 @@ def sync_subtitles(
         chunk_corrected = apply_chunk_correction(chunk, new_start, new_end, config)
         corrected_entries.extend(chunk_corrected)
 
-    # 5. 결과 생성
+    # 5. 겹침 보정
+    logger.info("엔트리 간 겹침 검사 및 보정 중...")
+    corrected_entries, overlaps_fixed = fix_entry_overlaps(corrected_entries, config)
+
+    # 6. 결과 생성
     result = []
     for entry in corrected_entries:
         result.append({
@@ -607,12 +697,13 @@ def sync_subtitles(
         'total_entries': len(entries),
         'total_chunks': len(chunks),
         'vad_segments': len(segments),
-        'corrections_applied': corrections_applied
+        'corrections_applied': corrections_applied,
+        'overlaps_fixed': overlaps_fixed
     }
 
     logger.info(
         f"보정 완료: {len(entries)}개 엔트리, {len(chunks)}개 청크, "
-        f"{corrections_applied}개 청크 보정됨"
+        f"{corrections_applied}개 청크 보정됨, {overlaps_fixed}개 겹침 수정됨"
     )
 
     return result, stats

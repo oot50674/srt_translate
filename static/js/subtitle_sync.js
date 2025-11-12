@@ -26,6 +26,7 @@ $(document).ready(function () {
     const $statChunks = $('#stat-chunks');
     const $statSegments = $('#stat-segments');
     const $statCorrections = $('#stat-corrections');
+    const $statOverlaps = $('#stat-overlaps');
 
     // 설정 입력 요소
     const $chunkMode = $('input[name="chunk_mode"]');
@@ -76,6 +77,7 @@ $(document).ready(function () {
         $statChunks.text(stats.total_chunks || '-');
         $statSegments.text(stats.vad_segments || '-');
         $statCorrections.text(stats.corrections_applied || '-');
+        $statOverlaps.text(stats.overlaps_fixed || '0');
     }
 
     /**
