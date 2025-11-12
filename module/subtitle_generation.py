@@ -24,6 +24,15 @@ from module import storage as storage_module
 from module.gemini_module import GeminiClient
 from module.video_split import SegmentMetadata, split_video_by_minutes, DEFAULT_STORAGE_KEY
 from module.Whisper_util import transcribe_audio_with_timestamps
+from module.subtitle_sync import (
+    SyncConfig,
+    SubtitleEntry as SyncSubtitleEntry,
+    apply_chunk_correction as sync_apply_chunk_correction,
+    build_chunks as sync_build_chunks,
+    filter_short_segments as sync_filter_short_segments,
+    merge_close_segments as sync_merge_close_segments,
+    snap_chunk_boundaries as sync_snap_chunk_boundaries,
+)
 
 if TYPE_CHECKING:  # pragma: no cover
     from werkzeug.datastructures import FileStorage
@@ -507,6 +516,121 @@ def _build_entries_from_whisper(job: SubtitleJob) -> List[Dict[str, Any]]:
                 }
             )
             next_index += 1
+    if entries:
+        entries = _apply_vad_sync_to_whisper_entries(job, entries)
+    return entries
+
+
+def _normalize_segment_vad_segments(segment: "SegmentState", config: SyncConfig) -> List[Dict[str, float]]:
+    if not segment.speech_segments:
+        return []
+    normalized: List[Dict[str, float]] = []
+    tolerance = 0.5
+    for raw in segment.speech_segments:
+        try:
+            raw_start = float(raw.get("start", 0.0))
+            raw_end = float(raw.get("end", 0.0))
+        except (TypeError, ValueError):
+            continue
+        if raw_end <= raw_start:
+            continue
+        start = raw_start
+        end = raw_end
+        if raw_end > segment.duration + tolerance or raw_start < -tolerance:
+            start = raw_start - segment.start_time
+            end = raw_end - segment.start_time
+        start = max(0.0, start)
+        end = min(segment.duration, end)
+        if end <= start:
+            continue
+        normalized.append({"start": round(start, 3), "end": round(end, 3)})
+    if not normalized:
+        return []
+    merged = sync_merge_close_segments(normalized, merge_threshold_ms=150)
+    filtered = sync_filter_short_segments(merged, config.vad_min_speech_duration_ms)
+    return filtered
+
+
+def _apply_vad_sync_to_whisper_entries(
+    job: "SubtitleJob",
+    entries: List[Dict[str, Any]],
+    config: Optional[SyncConfig] = None,
+) -> List[Dict[str, Any]]:
+    if not entries:
+        return entries
+    sync_config = config or SyncConfig()
+    entry_lookup = {entry["index"]: entry for entry in entries}
+    adjustments = 0
+    for segment in job.segments:
+        vad_segments = _normalize_segment_vad_segments(segment, sync_config)
+        if not vad_segments:
+            continue
+        segment_entries = [
+            entry
+            for entry in entries
+            if entry["start"] < segment.end_time and entry["end"] > segment.start_time
+        ]
+        if not segment_entries:
+            continue
+        segment_entries.sort(key=lambda item: item["start"])
+        sync_entries: List[SyncSubtitleEntry] = []
+        for entry in segment_entries:
+            start_ms = max(0.0, (entry["start"] - segment.start_time) * 1000.0)
+            end_ms = max(0.0, (entry["end"] - segment.start_time) * 1000.0)
+            if end_ms <= start_ms:
+                end_ms = start_ms + 1.0
+            sync_entries.append(
+                SyncSubtitleEntry(
+                    index=entry["index"],
+                    start_ms=start_ms,
+                    end_ms=end_ms,
+                    text=entry.get("text", ""),
+                )
+            )
+        chunks = sync_build_chunks(sync_entries, sync_config.chunk_mode, sync_config.gap_threshold_ms)
+        if not chunks:
+            continue
+        corrected_entries: List[SyncSubtitleEntry] = []
+        for idx, chunk in enumerate(chunks):
+            prev_chunk = chunks[idx - 1] if idx > 0 else None
+            next_chunk = chunks[idx + 1] if idx + 1 < len(chunks) else None
+            new_start_ms, new_end_ms = sync_snap_chunk_boundaries(
+                chunk,
+                vad_segments,
+                sync_config,
+                prev_chunk,
+                next_chunk,
+            )
+            corrected_entries.extend(
+                sync_apply_chunk_correction(
+                    chunk,
+                    new_start_ms,
+                    new_end_ms,
+                    sync_config,
+                )
+            )
+        if not corrected_entries:
+            continue
+        for corrected in corrected_entries:
+            entry = entry_lookup.get(corrected.index)
+            if not entry:
+                continue
+            new_start = segment.start_time + corrected.start_ms / 1000.0
+            new_end = segment.start_time + corrected.end_ms / 1000.0
+            new_start = max(segment.start_time, min(new_start, segment.end_time))
+            new_end = max(new_start + 0.001, min(new_end, segment.end_time))
+            if (
+                abs(entry["start"] - new_start) <= 0.0005
+                and abs(entry["end"] - new_end) <= 0.0005
+            ):
+                continue
+            entry["start"] = round(new_start, 3)
+            entry["end"] = round(new_end, 3)
+            adjustments += 1
+    if adjustments:
+        job.append_log(f"Silero VAD 기반 싱크 보정 적용: {adjustments}개 엔트리 조정")
+    else:
+        job.append_log("Silero VAD 기반 싱크 보정: 조정 대상 없음")
     return entries
 
 
