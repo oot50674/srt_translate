@@ -30,6 +30,7 @@ from module.subtitle_sync import (
     apply_chunk_correction as sync_apply_chunk_correction,
     build_chunks as sync_build_chunks,
     filter_short_segments as sync_filter_short_segments,
+    fix_entry_overlaps as sync_fix_entry_overlaps,
     merge_close_segments as sync_merge_close_segments,
     snap_chunk_boundaries as sync_snap_chunk_boundaries,
 )
@@ -561,6 +562,7 @@ def _apply_vad_sync_to_whisper_entries(
     sync_config = config or SyncConfig()
     entry_lookup = {entry["index"]: entry for entry in entries}
     adjustments = 0
+    overlaps_fixed = 0
     for segment in job.segments:
         vad_segments = _normalize_segment_vad_segments(segment, sync_config)
         if not vad_segments:
@@ -627,8 +629,35 @@ def _apply_vad_sync_to_whisper_entries(
             entry["start"] = round(new_start, 3)
             entry["end"] = round(new_end, 3)
             adjustments += 1
-    if adjustments:
-        job.append_log(f"Silero VAD 기반 싱크 보정 적용: {adjustments}개 엔트리 조정")
+    sync_entries_for_overlap: List[SyncSubtitleEntry] = []
+    for entry in entries:
+        start_ms = max(0.0, float(entry.get("start", 0.0)) * 1000.0)
+        end_ms = max(0.0, float(entry.get("end", 0.0)) * 1000.0)
+        if end_ms <= start_ms:
+            end_ms = start_ms + 1.0
+        sync_entries_for_overlap.append(
+            SyncSubtitleEntry(
+                index=entry["index"],
+                start_ms=start_ms,
+                end_ms=end_ms,
+                text=entry.get("text", ""),
+            )
+        )
+    corrected_for_overlap, overlaps_fixed = sync_fix_entry_overlaps(sync_entries_for_overlap, sync_config)
+    if overlaps_fixed:
+        for corrected_entry in corrected_for_overlap:
+            entry = entry_lookup.get(corrected_entry.index)
+            if not entry:
+                continue
+            entry["start"] = round(corrected_entry.start_ms / 1000.0, 3)
+            entry["end"] = round(corrected_entry.end_ms / 1000.0, 3)
+    if adjustments or overlaps_fixed:
+        summary_parts = []
+        if adjustments:
+            summary_parts.append(f"{adjustments}개 엔트리 조정")
+        if overlaps_fixed:
+            summary_parts.append(f"겹침 수정 {overlaps_fixed}개")
+        job.append_log("Silero VAD 기반 싱크 보정 적용: " + ", ".join(summary_parts))
     else:
         job.append_log("Silero VAD 기반 싱크 보정: 조정 대상 없음")
     return entries
