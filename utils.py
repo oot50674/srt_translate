@@ -129,12 +129,21 @@ def cleanup_old_files(days: int = 3) -> None:
                 path = os.path.join(job_root, entry)
                 try:
                     mtime = os.path.getmtime(path)
-                    if mtime < cutoff_ts:
-                        if os.path.isdir(path):
-                            shutil.rmtree(path)
-                        else:
-                            os.remove(path)
-                        logger.info("오래된 작업 삭제: %s", path)
+                        if mtime < cutoff_ts:
+                            if os.path.isdir(path):
+                                try:
+                                    shutil.rmtree(path)
+                                except FileNotFoundError:
+                                    # 이미 삭제된 파일/폴더는 무시합니다.
+                                    logger.debug("이미 삭제된 작업 경로: %s", path)
+                                    continue
+                            else:
+                                try:
+                                    os.remove(path)
+                                except FileNotFoundError:
+                                    logger.debug("이미 삭제된 작업 파일: %s", path)
+                                    continue
+                            logger.info("오래된 작업 삭제: %s", path)
                 except Exception as exc:
                     logger.exception("오래된 작업 삭제 실패: %s (%s)", path, exc)
 

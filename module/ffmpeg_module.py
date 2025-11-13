@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 from typing import Dict, Optional
 import subprocess
 import math
@@ -46,6 +47,13 @@ def resolve_ffmpeg_bin_dir(base_path: Optional[str] = None) -> str:
     candidate = os.path.join(project_root, "ffmpeg-8.0", "bin")
     if os.path.isdir(candidate):
         return candidate
+    # 번들 바이너리가 없으면 시스템 PATH 내 ffmpeg 위치를 탐색합니다.
+    system_ffmpeg = shutil.which(_binary_name("ffmpeg"))
+    if system_ffmpeg:
+        return os.path.dirname(system_ffmpeg)
+    system_ffprobe = shutil.which(_binary_name("ffprobe"))
+    if system_ffprobe:
+        return os.path.dirname(system_ffprobe)
     raise FileNotFoundError(f"FFmpeg bin directory not found: {candidate}")
 
 def _binary_name(base: str) -> str:
@@ -59,9 +67,21 @@ def register_ffmpeg_path(base_path: Optional[str] = None) -> Dict[str, str]:
     ffmpeg_binary = os.path.join(bin_dir, _binary_name("ffmpeg"))
     ffprobe_binary = os.path.join(bin_dir, _binary_name("ffprobe"))
 
+    # 번들 경로에 실행 파일이 없다면 시스템 PATH에서 다시 확인합니다.
     if not os.path.isfile(ffmpeg_binary):
-        raise FileNotFoundError(f"ffmpeg binary not found: {ffmpeg_binary}")
+        system_ffmpeg = shutil.which(_binary_name("ffmpeg"))
+        if system_ffmpeg:
+            ffmpeg_binary = system_ffmpeg
+            bin_dir = os.path.dirname(system_ffmpeg)
     if not os.path.isfile(ffprobe_binary):
+        system_ffprobe = shutil.which(_binary_name("ffprobe"))
+        if system_ffprobe:
+            ffprobe_binary = system_ffprobe
+            bin_dir = os.path.dirname(ffprobe_binary)
+
+    if not ffmpeg_binary or not os.path.isfile(ffmpeg_binary):
+        raise FileNotFoundError(f"ffmpeg binary not found: {ffmpeg_binary}")
+    if not ffprobe_binary or not os.path.isfile(ffprobe_binary):
         raise FileNotFoundError(f"ffprobe binary not found: {ffprobe_binary}")
 
     # PATH에 bin 디렉터리가 없으면 추가
