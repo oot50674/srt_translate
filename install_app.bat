@@ -64,7 +64,7 @@ start "Flask Server" "%VENV_DIR%\Scripts\python.exe" app.py
 
 rem Give the server a moment to start then open the browser.
 timeout /t 3 /nobreak >nul
-start "" "http://127.0.0.1:5000"
+start "" "http://127.0.0.1:6789"
 
 
 echo 모든 준비가 완료되었습니다.

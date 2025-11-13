@@ -25,10 +25,10 @@ start "Flask Server" "%VENV_DIR%\Scripts\python.exe" app.py
 
 rem Wait for the server to be ready by checking if it responds
 echo Waiting for Flask server to start...
-powershell -Command "& { $url = 'http://127.0.0.1:5000'; $timeout = 30; $startTime = Get-Date; while (((Get-Date) - $startTime).TotalSeconds -lt $timeout) { try { $response = Invoke-WebRequest -Uri $url -Method GET -TimeoutSec 1 -ErrorAction Stop; if ($response.StatusCode -eq 200) { Write-Host 'Server is ready!'; break; } } catch { Start-Sleep -Seconds 1; } } }" >nul 2>&1
+powershell -Command "& { $url = 'http://127.0.0.1:6789'; $timeout = 30; $startTime = Get-Date; while (((Get-Date) - $startTime).TotalSeconds -lt $timeout) { try { $response = Invoke-WebRequest -Uri $url -Method GET -TimeoutSec 1 -ErrorAction Stop; if ($response.StatusCode -eq 200) { Write-Host 'Server is ready!'; break; } } catch { Start-Sleep -Seconds 1; } } }" >nul 2>&1
 
 rem Open the browser
-start "" "http://127.0.0.1:5000"
+start "" "http://127.0.0.1:6789"
 
 
 echo Flask server started.

@@ -103,8 +103,51 @@ Flask 기반 AI 자막 번역 & 생성 웹 애플리케이션
 
 5. 웹 브라우저에서 애플리케이션 접속:
   ```
-  http://127.0.0.1:5000
+  http://127.0.0.1:6789
   ```
+
+### Docker 배포
+
+Docker를 사용하여 CUDA GPU를 지원하는 환경에서 배포할 수 있습니다.
+
+#### 사전 요구사항
+
+- Docker 및 Docker Compose 설치
+- NVIDIA GPU 및 NVIDIA Container Toolkit 설치
+- 호스트 시스템에 CUDA 드라이버 설치
+
+#### 배포 방법
+
+1. **이미지 빌드 및 컨테이너 실행**:
+   ```bash
+   docker compose up --build -d
+   ```
+   
+   또는 Docker Compose v1 사용 시:
+   ```bash
+   docker-compose up --build -d
+   ```
+
+2. **애플리케이션 접속**:
+   ```
+   http://localhost:6789
+   ```
+
+3. **컨테이너 로그 확인**:
+   ```bash
+   docker compose logs -f
+   ```
+
+4. **컨테이너 중지**:
+   ```bash
+   docker compose down
+   ```
+
+#### 주의사항
+
+- Windows에서 Docker Desktop을 사용하는 경우 WSL2 백엔드 사용을 권장합니다.
+- GPU가 제대로 인식되지 않으면 `nvidia-smi` 명령으로 호스트 GPU 상태를 확인하세요.
+- 컨테이너 내부에서 생성된 파일(`generated_subtitles/`, `snapshots/` 등)은 볼륨 마운트를 통해 호스트에서도 접근 가능합니다.
 
 ## 기술 스택
 
@@ -130,6 +173,9 @@ Flask 기반 AI 자막 번역 & 생성 웹 애플리케이션
 project/
 ├── app.py                          # Flask 애플리케이션 엔트리 포인트
 ├── requirements.txt                # Python 의존성 목록
+├── Dockerfile                       # Docker 이미지 빌드 설정
+├── docker-compose.yml              # Docker Compose 설정 (GPU 지원)
+├── .dockerignore                   # Docker 빌드 시 제외할 파일 목록
 ├── module/                         # 주요 기능 모듈
 │   ├── database_module.py          # 데이터베이스 관리
 │   ├── ffmpeg_module.py            # 비디오/오디오 처리

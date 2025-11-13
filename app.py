@@ -727,4 +727,4 @@ def api_extract_audio_from_video():
         return jsonify({'error': f'오디오 추출 중 오류가 발생했습니다: {str(e)}'}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=True, port=6789)
