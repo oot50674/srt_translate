@@ -39,6 +39,6 @@ COPY . .
 
 EXPOSE 6789
 
-CMD ["gunicorn", "--bind", "0.0.0.0:6789", "app:app", "--workers", "4"]
+CMD ["gunicorn", "--bind", "0.0.0.0:6789", "app:app", "--workers", "1", "--threads", "4"]
 
 
