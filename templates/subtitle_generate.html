@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>자막 생성</title>
+    <title>LLM 자막 생성</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Work+Sans:wght@400;500;600;700&family=Noto+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -27,7 +27,8 @@
                     </div>
                     <nav class="flex items-center gap-6">
                         <a class="text-slate-700 hover:text-[#0c77f2] text-sm font-medium leading-normal transition-colors" href="/">자막 번역</a>
-                        <a class="text-[#0c77f2] text-sm font-semibold leading-normal" href="/subtitle_generate">자막 생성</a>
+                        <a class="text-[#0c77f2] text-sm font-semibold leading-normal" href="/subtitle_generate">LLM 자막 생성</a>
+                        <a class="text-slate-700 hover:text-[#0c77f2] text-sm font-medium leading-normal transition-colors" href="/whisper_only">Whisper 전사</a>
                         <a class="text-slate-700 hover:text-[#0c77f2] text-sm font-medium leading-normal transition-colors" href="/subtitle_sync">자막 보정 싱크</a>
                     </nav>
                 </div>
@@ -39,7 +40,7 @@
                 <div class="max-w-3xl mx-auto">
                     <div class="flex flex-col w-full py-8 bg-white shadow-xl rounded-xl px-6 md:px-10">
                         <div class="mb-8">
-                            <h1 class="text-2xl font-semibold text-slate-900">자막 생성</h1>
+                            <h1 class="text-2xl font-semibold text-slate-900">LLM 자막 생성</h1>
                             <p class="mt-2 text-sm text-slate-600">YouTube 링크 또는 영상/오디오 파일을 업로드하여 자막을 생성하고, 원본 전사 또는 번역 옵션을 선택하세요.</p>
                             {% if missing_api_key %}
                             <div id="api-key-warning" class="mt-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
@@ -98,13 +99,6 @@
                                         <input type="radio" id="mode-translate-radio" name="transcription_mode" value="translate" class="h-4 w-4 text-[#0c77f2] focus:ring-[#0c77f2]">
                                         <span class="text-sm text-slate-700">특정 언어로 번역</span>
                                     </label>
-                                    <label class="flex items-center gap-3">
-                                        <input type="radio" id="mode-whisper-radio" name="transcription_mode" value="whisper_only" class="h-4 w-4 text-[#0c77f2] focus:ring-[#0c77f2]">
-                                        <span class="text-sm text-slate-700">Whisper 전사만 사용 (LLM 미사용)</span>
-                                    </label>
-                                    <div id="whisper-only-note" class="hidden rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-xs text-slate-600">
-                                        Whisper-only 모드는 Whisper 전사 결과만으로 자막을 구성하며 Gemini API 키 없이도 실행됩니다.
-                                    </div>
                                     <div id="translation-language" class="hidden md:flex md:flex-col">
                                         <label class="flex flex-col gap-2">
                                             <span class="text-sm font-medium text-slate-700">번역 대상 언어</span>

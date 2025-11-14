@@ -8,6 +8,7 @@
 /snapshots
 /download_video
 /generated_subtitles
+/whisper_batches
 /.claude
 AGENTS.md
 *.pyc

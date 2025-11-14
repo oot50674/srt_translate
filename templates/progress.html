@@ -18,7 +18,7 @@
 <body class="bg-slate-50" style='font-family: "Work Sans", "Noto Sans", sans-serif;'>
     <div class="relative flex size-full min-h-screen flex-col group/design-root overflow-x-hidden">
         <div class="layout-container flex h-full grow flex-col">
-            <header class="flex items-center justify-between whitespace-nowrap border-b border-solid border-b-slate-200 px-10 py-4 bg-white shadow-sm">
+            <header id="page-header" class="flex items-center justify-between whitespace-nowrap border-b border-solid border-b-slate-200 px-10 py-4 bg-white shadow-sm">
                 <div class="flex items-center gap-3 text-slate-900">
                     <div class="size-7 text-[#0c77f2]">
                         <svg fill="none" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
@@ -28,8 +28,11 @@
                     <a href="/" class="text-slate-900 text-xl font-semibold leading-tight tracking-[-0.015em] hover:text-[#0c77f2] transition-colors cursor-pointer">자막 번역기</a>
                 </div>
                 <div class="flex flex-1 justify-end gap-6">
-                    <nav class="flex items-center gap-6">
-                        <!-- 네비게이션 링크 -->
+                    <nav id="page-nav" class="flex items-center gap-6">
+                        <a class="text-slate-700 hover:text-[#0c77f2] text-sm font-medium leading-normal transition-colors" href="/">자막 번역</a>
+                        <a class="text-slate-700 hover:text-[#0c77f2] text-sm font-medium leading-normal transition-colors" href="/subtitle_generate">LLM 자막 생성</a>
+                        <a class="text-slate-700 hover:text-[#0c77f2] text-sm font-medium leading-normal transition-colors" href="/whisper_only">Whisper 전사</a>
+                        <a class="text-[#0c77f2] text-sm font-semibold leading-normal" href="/subtitle_sync">자막 보정 싱크</a>
                     </nav>
                     <div class="flex gap-3">
                         <!-- 버튼들 -->
@@ -37,7 +40,7 @@
                 </div>
             </header>
             
-            <main class="px-2 sm:px-4 md:px-6 lg:px-8 xl:px-10 flex flex-1 justify-center py-4 sm:py-6 md:py-8">
+            <main id="page-main" class="px-2 sm:px-4 md:px-6 lg:px-8 xl:px-10 flex flex-1 justify-center py-4 sm:py-6 md:py-8">
                 <div class="layout-content-container flex flex-col w-full max-w-5xl">
                     <div class="mb-8 p-4 bg-white rounded-lg shadow">
                         <div class="flex gap-4 justify-between items-center mb-2">
@@ -79,6 +82,10 @@
                     </div>
                 </div>
             </main>
+
+            <footer id="page-footer" class="px-10 py-4 bg-white border-t border-slate-200 text-center text-xs text-slate-500">
+                진행 중인 번역 작업은 이 창에서 자동으로 갱신됩니다.
+            </footer>
         </div>
     </div>
     

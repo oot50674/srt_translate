@@ -84,8 +84,6 @@
         let modeLabel = '전사';
         if (job.mode === 'translate') {
             modeLabel = `번역 (${job.target_language || '-'})`;
-        } else if (job.mode === 'whisper_only') {
-            modeLabel = 'Whisper 전사';
         }
         entries.push({
             label: '모드',

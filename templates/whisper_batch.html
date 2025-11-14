@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Whisper 전사 진행 상황</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Work+Sans:wght@400;500;600;700&family=Noto+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet" />
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+
+<body class="bg-slate-100" style='font-family: "Work Sans", "Noto Sans", sans-serif;' data-batch-id="{{ batch_id }}">
+    <div class="relative flex min-h-screen size-full flex-col">
+        <div class="layout-container flex h-full grow flex-col">
+            <header id="page-header" class="flex items-center justify-between whitespace-nowrap border-b border-solid border-b-slate-200 px-10 py-4 bg-white shadow-sm">
+                <div class="flex items-center gap-6">
+                    <div class="flex items-center gap-3 text-slate-900">
+                        <div class="size-7 text-[#0c77f2]">
+                            <svg fill="none" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M4 42.4379C4 42.4379 14.0962 36.0744 24 41.1692C35.0664 46.8624 44 42.2078 44 42.2078L44 7.01134C44 7.01134 35.068 11.6577 24.0031 5.96913C14.0971 0.876274 4 7.27094 4 7.27094L4 42.4379Z" fill="currentColor"></path>
+                            </svg>
+                        </div>
+                        <h2 class="text-slate-900 text-xl font-semibold leading-tight tracking-[-0.015em]">자막 번역기</h2>
+                    </div>
+                    <nav class="flex items-center gap-6">
+                        <a class="text-slate-700 hover:text-[#0c77f2] text-sm font-medium leading-normal transition-colors" href="/">자막 번역</a>
+                        <a class="text-slate-700 hover:text-[#0c77f2] text-sm font-medium leading-normal transition-colors" href="/subtitle_generate">LLM 자막 생성</a>
+                        <a class="text-[#0c77f2] text-sm font-semibold leading-normal" href="/whisper_only">Whisper 전사</a>
+                        <a class="text-slate-700 hover:text-[#0c77f2] text-sm font-medium leading-normal transition-colors" href="/subtitle_sync">자막 보정 싱크</a>
+                    </nav>
+                </div>
+            </header>
+
+            <main id="page-main" class="px-4 md:px-10 lg:px-20 py-10">
+                <section id="batch-status-section" class="max-w-5xl mx-auto space-y-6">
+                    <div id="batch-alert" class="hidden rounded-lg border px-4 py-3 text-sm"></div>
+
+                    <article id="batch-summary-article" class="bg-white shadow-xl rounded-xl p-6 space-y-5">
+                        <div class="flex flex-col gap-2">
+                            <h1 class="text-2xl font-semibold text-slate-900">배치 ID: <span id="whisper-batch-id" class="text-[#0c77f2]">{{ batch_id }}</span></h1>
+                            <p id="whisper-batch-status-text" class="text-sm text-slate-500">진행 중</p>
+                        </div>
+                        <div class="space-y-2">
+                            <div class="flex items-center justify-between text-sm">
+                                <p class="text-slate-600">전체 진행률</p>
+                                <p id="whisper-batch-progress-text" class="font-semibold text-slate-900">0%</p>
+                            </div>
+                            <div class="w-full rounded-full bg-slate-200 h-3 overflow-hidden">
+                                <div id="whisper-batch-progress-bar" class="h-full rounded-full bg-[#0c77f2] transition-all duration-500" style="width: 0%;"></div>
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div class="rounded-lg border border-slate-200 p-4">
+                                <p class="text-xs text-slate-500">전체 파일</p>
+                                <p id="whisper-total-count" class="text-xl font-semibold text-slate-900 mt-1">0</p>
+                            </div>
+                            <div class="rounded-lg border border-slate-200 p-4">
+                                <p class="text-xs text-slate-500">완료</p>
+                                <p id="whisper-complete-count" class="text-xl font-semibold text-emerald-600 mt-1">0</p>
+                            </div>
+                            <div class="rounded-lg border border-slate-200 p-4">
+                                <p class="text-xs text-slate-500">실패/중지</p>
+                                <p id="whisper-failed-count" class="text-xl font-semibold text-red-600 mt-1">0</p>
+                            </div>
+                        </div>
+                    </article>
+
+                    <section id="batch-files-section" class="bg-white shadow-xl rounded-xl p-6 space-y-4">
+                        <div class="flex items-center justify-between flex-wrap gap-2">
+                            <h2 class="text-xl font-semibold text-slate-900">파일별 진행 상황</h2>
+                            <span id="whisper-updated-at" class="text-xs text-slate-500">-</span>
+                        </div>
+                        <div id="whisper-files-list" class="space-y-3"></div>
+                        <div id="whisper-files-placeholder" class="rounded-lg border border-dashed border-slate-200 px-4 py-6 text-center text-sm text-slate-500">파일 정보를 불러오는 중입니다.</div>
+                    </section>
+
+                </section>
+            </main>
+
+            <footer id="page-footer" class="mt-auto px-10 py-6 bg-white border-t border-slate-200 text-xs text-slate-500 text-center">
+                Whisper-only 전사는 파일 개수와 길이에 따라 시간이 소요됩니다.
+            </footer>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/whisper_batch.js') }}" defer></script>
+</body>
+
+</html>

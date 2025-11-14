@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Whisper 전사 전용</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Work+Sans:wght@400;500;600;700&family=Noto+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet" />
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+
+<body class="bg-slate-100" style='font-family: "Work Sans", "Noto Sans", sans-serif;'>
+    <div class="relative flex min-h-screen size-full flex-col">
+        <div class="layout-container flex h-full grow flex-col">
+            <header id="page-header" class="flex items-center justify-between whitespace-nowrap border-b border-solid border-b-slate-200 px-10 py-4 bg-white shadow-sm">
+                <div class="flex items-center gap-6">
+                    <div class="flex items-center gap-3 text-slate-900">
+                        <div class="size-7 text-[#0c77f2]">
+                            <svg fill="none" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M4 42.4379C4 42.4379 14.0962 36.0744 24 41.1692C35.0664 46.8624 44 42.2078 44 42.2078L44 7.01134C44 7.01134 35.068 11.6577 24.0031 5.96913C14.0971 0.876274 4 7.27094 4 7.27094L4 42.4379Z" fill="currentColor"></path>
+                            </svg>
+                        </div>
+                        <h2 class="text-slate-900 text-xl font-semibold leading-tight tracking-[-0.015em]">자막 번역기</h2>
+                    </div>
+                    <nav class="flex items-center gap-6">
+                        <a class="text-slate-700 hover:text-[#0c77f2] text-sm font-medium leading-normal transition-colors" href="/">자막 번역</a>
+                        <a class="text-slate-700 hover:text-[#0c77f2] text-sm font-medium leading-normal transition-colors" href="/subtitle_generate">LLM 자막 생성</a>
+                        <a class="text-[#0c77f2] text-sm font-semibold leading-normal" href="/whisper_only">Whisper 전사</a>
+                        <a class="text-slate-700 hover:text-[#0c77f2] text-sm font-medium leading-normal transition-colors" href="/subtitle_sync">자막 보정 싱크</a>
+                    </nav>
+                </div>
+            </header>
+
+            <main id="page-main" class="px-4 md:px-10 lg:px-20 py-10">
+                <section id="whisper-upload-section" class="max-w-4xl mx-auto w-full">
+                    <article id="whisper-upload-article" class="w-full py-8 bg-white shadow-xl rounded-xl px-6 md:px-10 flex flex-col gap-6">
+                        <header id="upload-header" class="space-y-2">
+                            <h1 class="text-2xl font-semibold text-slate-900">Whisper 전용 전사</h1>
+                            <p class="text-sm text-slate-600">LLM 없이 Whisper 전사만 빠르게 실행합니다. 여러 영상 또는 오디오 파일을 한 번에 업로드할 수 있습니다.</p>
+                        </header>
+
+                        <div id="whisper-alert" class="hidden rounded-lg border px-4 py-3 text-sm"></div>
+
+                        <form id="whisper-upload-form" class="space-y-6" enctype="multipart/form-data">
+                            <div class="space-y-3">
+                                <label for="whisper-file-input" class="text-sm font-medium text-slate-700">영상/오디오 파일</label>
+                                <div id="whisper-drop-zone" class="flex flex-col items-center justify-center gap-4 rounded-lg border-2 border-dashed border-slate-300 px-6 py-10 text-center bg-slate-50 hover:border-slate-400 transition-colors cursor-pointer">
+                                    <span class="material-icons text-4xl text-slate-500">upload_file</span>
+                                    <p class="text-slate-700 text-base font-medium leading-tight">파일을 이곳에 드래그하거나 선택하세요</p>
+                                    <p class="text-slate-500 text-sm">MP4, MOV, MKV, MP3, WAV 등의 형식을 지원합니다.</p>
+                                    <input type="file" id="whisper-file-input" name="media_files" multiple accept="audio/*,video/*" class="hidden">
+                                    <button id="whisper-select-btn" type="button" class="flex items-center gap-2 rounded-md border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 transition-colors">
+                                        파일 선택
+                                    </button>
+                                </div>
+                                <div id="whisper-file-list" class="hidden flex flex-col gap-2 rounded-lg border border-slate-100 bg-slate-50 p-4"></div>
+                            </div>
+
+                            <div id="whisper-settings" class="space-y-2">
+                                <label for="whisper-chunk-minutes" class="text-sm font-medium text-slate-700">청크 길이 (분)</label>
+                                <div class="flex flex-col gap-1">
+                                    <input type="number" id="whisper-chunk-minutes" name="chunk_minutes" min="1" step="0.5" value="10" class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20">
+                                    <p class="text-xs text-slate-500">Silero VAD 기반으로 음성 구간을 자를 때 사용할 길이입니다. 긴 영상일수록 약간 크게 설정하면 효율적입니다.</p>
+                                </div>
+                            </div>
+
+                            <div class="flex items-center justify-between flex-wrap gap-3">
+                                <p class="text-xs text-slate-500">파일당 Whisper 전사가 개별 작업으로 실행됩니다.</p>
+                                <button id="whisper-submit-btn" type="submit" class="flex min-w-[160px] items-center justify-center gap-2 rounded-md bg-[#0c77f2] px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-600 disabled:opacity-60 disabled:cursor-not-allowed">
+                                    <span id="whisper-submit-spinner" class="material-icons text-base hidden">autorenew</span>
+                                    <span id="whisper-submit-text">전사 시작</span>
+                                </button>
+                            </div>
+                        </form>
+                    </article>
+                </section>
+            </main>
+
+            <footer id="page-footer" class="mt-auto px-10 py-6 bg-white border-t border-slate-200 text-xs text-slate-500 text-center">
+                Whisper-only 전사는 서버 리소스 상황에 따라 시간이 달라질 수 있습니다.
+            </footer>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/whisper_only.js') }}" defer></script>
+</body>
+
+</html>

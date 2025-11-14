@@ -2,7 +2,6 @@
     const form = document.getElementById('subtitle-generate-form');
     const modeRadios = document.querySelectorAll('input[name="transcription_mode"]');
     const translationLanguage = document.getElementById('translation-language');
-    const whisperOnlyNote = document.getElementById('whisper-only-note');
     const alertBox = document.getElementById('subtitle-generate-alert');
     const submitBtn = document.getElementById('subtitle-submit-btn');
     const submitSpinner = document.getElementById('subtitle-submit-spinner');
@@ -68,9 +67,6 @@
         const mode = getSelectedMode();
         if (translationLanguage) {
             translationLanguage.classList.toggle('hidden', mode !== 'translate');
-        }
-        if (whisperOnlyNote) {
-            whisperOnlyNote.classList.toggle('hidden', mode !== 'whisper_only');
         }
     }
 
@@ -233,7 +229,7 @@
         if (mode === 'translate' && !targetLanguage) {
             throw new Error('번역할 언어를 입력해 주세요.');
         }
-        if (missingApiKey && mode !== 'whisper_only') {
+        if (missingApiKey) {
             throw new Error('Google API Key가 설정되지 않았습니다.');
         }
     }

@@ -39,6 +39,12 @@ from utils import (
     translate_srt_stream,
     cleanup_old_files,
 )
+from module.whisper_batch import (
+    create_batch as create_whisper_batch,
+    get_batch_state as get_whisper_batch_state,
+    get_item_transcript_path as get_whisper_transcript_path,
+    has_batch as has_whisper_batch,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -144,6 +150,20 @@ def subtitle_generate():
 def subtitle_sync():
     """자막 보정 싱크 페이지 템플릿을 렌더링합니다."""
     return render_template('subtitle_sync.html')
+
+
+@app.route('/whisper_only')
+def whisper_only_page():
+    """Whisper-only 업로드 페이지를 렌더링합니다."""
+    return render_template('whisper_only.html')
+
+
+@app.route('/whisper_only/batches/<batch_id>')
+def whisper_batch_status_page(batch_id: str):
+    """Whisper-only 배치 진행 상황을 보여주는 페이지입니다."""
+    if not has_whisper_batch(batch_id):
+        abort(404)
+    return render_template('whisper_batch.html', batch_id=batch_id)
 
 
 @app.route('/subtitle_jobs/<job_id>')
@@ -316,6 +336,40 @@ def api_retry_subtitle_segments(job_id: str):
         logger.exception("Failed to retry subtitle segments")
         return jsonify({'error': '세그먼트 재시도 요청을 처리하지 못했습니다.'}), 500
     return jsonify({'status': 'retrying', 'job': job})
+
+
+@app.route('/api/whisper/batch', methods=['POST'])
+def api_create_whisper_batch():
+    files = request.files.getlist('media_files')
+    chunk_minutes_raw = request.form.get('chunk_minutes') or 10
+    try:
+        chunk_minutes = float(chunk_minutes_raw)
+    except (TypeError, ValueError):
+        chunk_minutes = 10.0
+    try:
+        batch = create_whisper_batch(files=files, chunk_minutes=chunk_minutes)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    except Exception:
+        logger.exception("Failed to start Whisper-only batch")
+        return jsonify({'error': 'Whisper 전사 작업을 준비하지 못했습니다.'}), 500
+    return jsonify(batch)
+
+
+@app.route('/api/whisper/batch/<batch_id>', methods=['GET'])
+def api_get_whisper_batch(batch_id: str):
+    batch = get_whisper_batch_state(batch_id)
+    if not batch:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify(batch)
+
+
+@app.route('/api/whisper/batch/<batch_id>/items/<item_id>/download', methods=['GET'])
+def api_download_whisper_item(batch_id: str, item_id: str):
+    path = get_whisper_transcript_path(batch_id, item_id)
+    if not path:
+        return jsonify({'error': 'not ready'}), 404
+    return send_file(path, as_attachment=True, download_name=os.path.basename(path))
 
 @app.route('/api/jobs', methods=['POST'])
 def api_create_job():
@@ -736,4 +790,4 @@ def api_extract_audio_from_video():
         return jsonify({'error': f'오디오 추출 중 오류가 발생했습니다: {str(e)}'}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True, port=6789)
+    app.run(host='0.0.0.0', debug=True, port=6789)
