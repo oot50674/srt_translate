@@ -601,7 +601,8 @@ def fix_entry_overlaps(
 def sync_subtitles(
     subtitles: List[Dict],
     audio_path: str,
-    config: Optional[SyncConfig] = None
+    config: Optional[SyncConfig] = None,
+    precomputed_segments: Optional[List[Dict[str, float]]] = None,
 ) -> Tuple[List[Dict], Dict]:
     """자막을 VAD 기반으로 보정
 
@@ -622,19 +623,32 @@ def sync_subtitles(
         logger.warning("파싱된 엔트리가 없습니다.")
         return subtitles, {'status': 'no_entries'}
 
-    # 2. VAD 세그먼트 추출
-    logger.info("VAD 세그먼트 추출 중...")
-    try:
-        vad = SileroVAD(
-            threshold=config.vad_threshold,
-            min_speech_duration_ms=config.vad_min_speech_duration_ms,
-            min_silence_duration_ms=config.vad_min_silence_duration_ms,
-            speech_pad_ms=config.vad_speech_pad_ms
-        )
-        segments = vad.detect_speech_from_file(audio_path)
-    except Exception as e:
-        logger.error(f"VAD 처리 실패: {e}")
-        return subtitles, {'status': 'vad_error', 'error': str(e)}
+    # 2. VAD 세그먼트 준비
+    segment_source = "vad"
+    if precomputed_segments:
+        logger.info("사전 계산된 VAD 세그먼트를 사용합니다.")
+        segments = [
+            {
+                "start": float(seg.get("start", 0.0)),
+                "end": float(seg.get("end", 0.0)),
+            }
+            for seg in precomputed_segments
+            if float(seg.get("end", 0.0)) > float(seg.get("start", 0.0))
+        ]
+        segment_source = "precomputed"
+    else:
+        logger.info("VAD 세그먼트를 추출 중입니다...")
+        try:
+            vad = SileroVAD(
+                threshold=config.vad_threshold,
+                min_speech_duration_ms=config.vad_min_speech_duration_ms,
+                min_silence_duration_ms=config.vad_min_silence_duration_ms,
+                speech_pad_ms=config.vad_speech_pad_ms
+            )
+            segments = vad.detect_speech_from_file(audio_path)
+        except Exception as e:
+            logger.error(f"VAD 처리 실패: {e}")
+            return subtitles, {'status': 'vad_error', 'error': str(e)}
 
     # 세그먼트 후처리
     segments = merge_close_segments(segments, merge_threshold_ms=150)
@@ -698,7 +712,8 @@ def sync_subtitles(
         'total_chunks': len(chunks),
         'vad_segments': len(segments),
         'corrections_applied': corrections_applied,
-        'overlaps_fixed': overlaps_fixed
+        'overlaps_fixed': overlaps_fixed,
+        'segment_source': segment_source,
     }
 
     logger.info(

@@ -10,9 +10,9 @@
     const submitBtn = document.getElementById('whisper-submit-btn');
     const submitSpinner = document.getElementById('whisper-submit-spinner');
     const submitText = document.getElementById('whisper-submit-text');
-    const chunkMinutesInput = document.getElementById('whisper-chunk-minutes');
+    const chunkSecondsInput = document.getElementById('whisper-chunk-seconds');
     const selectedFiles = [];
-    const STORAGE_KEY = 'whisper_chunk_minutes';
+    const STORAGE_KEY = 'whisper_chunk_seconds';
 
     function showAlert(message, type = 'error') {
         if (!alertBox) return;
@@ -72,20 +72,20 @@
         });
     }
 
-    function loadStoredChunkMinutes() {
-        if (!chunkMinutesInput) return;
+    function loadStoredChunkSeconds() {
+        if (!chunkSecondsInput) return;
         try {
             const storedValue = localStorage.getItem(STORAGE_KEY);
             if (storedValue) {
-                chunkMinutesInput.value = storedValue;
+                chunkSecondsInput.value = storedValue;
             }
         } catch (err) {
             console.warn('로컬스토리지에서 청크 길이를 불러오지 못했습니다.', err);
         }
     }
 
-    function persistChunkMinutes(value) {
-        if (!chunkMinutesInput) return;
+    function persistChunkSeconds(value) {
+        if (!chunkSecondsInput) return;
         try {
             if (Number.isFinite(value) && value > 0) {
                 localStorage.setItem(STORAGE_KEY, String(value));
@@ -150,10 +150,10 @@
                 handleNewFiles(fileInput.files);
             }
         });
-        chunkMinutesInput?.addEventListener('input', () => {
-            const val = parseFloat(chunkMinutesInput.value);
+        chunkSecondsInput?.addEventListener('input', () => {
+            const val = parseFloat(chunkSecondsInput.value);
             if (Number.isFinite(val)) {
-                persistChunkMinutes(val);
+                persistChunkSeconds(val);
             }
         });
     }
@@ -164,18 +164,18 @@
             showAlert('최소 한 개 이상의 파일을 선택해 주세요.');
             return;
         }
-        const chunkMinutesValue = parseFloat(chunkMinutesInput?.value || '10');
-        if (!Number.isFinite(chunkMinutesValue) || chunkMinutesValue <= 0) {
-            showAlert('청크 길이는 1분 이상의 숫자로 입력해 주세요.');
-            chunkMinutesInput?.focus();
+        const chunkSecondsValue = parseFloat(chunkSecondsInput?.value || '30');
+        if (!Number.isFinite(chunkSecondsValue) || chunkSecondsValue <= 0) {
+            showAlert('청크 길이는 초 단위 양수로 입력해 주세요.');
+            chunkSecondsInput?.focus();
             return;
         }
-        persistChunkMinutes(chunkMinutesValue);
+        persistChunkSeconds(chunkSecondsValue);
         const formData = new FormData();
         selectedFiles.forEach(file => {
             formData.append('media_files', file);
         });
-        formData.append('chunk_minutes', String(chunkMinutesValue));
+        formData.append('chunk_seconds', String(chunkSecondsValue));
 
         setSubmitting(true);
         showAlert('');
@@ -203,6 +203,6 @@
 
     bindDropZone();
     bindSelectBtn();
-    loadStoredChunkMinutes();
+    loadStoredChunkSeconds();
     form.addEventListener('submit', handleSubmit);
 })();

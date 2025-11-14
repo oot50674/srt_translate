@@ -17,6 +17,8 @@ from module.video_split import (
     split_video_by_minutes,
 )
 from module.Whisper_util import WhisperUtil
+from module import srt_module
+from module.subtitle_sync import SyncConfig, sync_subtitles, export_srt
 
 
 WHISPER_BATCH_ROOT = os.path.join(BASE_DIR, "whisper_batches")
@@ -108,6 +110,8 @@ class WhisperBatchItem:
     error: Optional[str] = None
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
+    download_ready: bool = False
+    speech_timeline: List[Dict[str, float]] = field(default_factory=list)
 
     def to_dict(self, batch_id: str) -> Dict[str, Any]:
         download_url = None
@@ -119,7 +123,7 @@ class WhisperBatchItem:
             "status": self.status,
             "progress": self.progress,
             "message": self.message,
-            "transcript_ready": bool(download_url),
+            "transcript_ready": bool(download_url and self.download_ready),
             "download_url": download_url,
             "updated_at": self.updated_at,
         }
@@ -128,7 +132,7 @@ class WhisperBatchItem:
 @dataclass
 class WhisperBatch:
     batch_id: str
-    chunk_minutes: float
+    chunk_seconds: float
     base_dir: str
     items: List[WhisperBatchItem] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
@@ -148,7 +152,7 @@ class WhisperBatch:
         overall = sum(item.progress for item in self.items) / total
         return {
             "batch_id": self.batch_id,
-            "chunk_minutes": self.chunk_minutes,
+            "chunk_seconds": self.chunk_seconds,
             "status": self.status,
             "items": entries,
             "total_items": len(entries),
@@ -237,20 +241,70 @@ def _transcribe_segments(
     return dest
 
 
+def _apply_vad_sync(batch: WhisperBatch, item: WhisperBatchItem) -> None:
+    if not item.transcript_path or not os.path.isfile(item.transcript_path):
+        item.download_ready = False
+        return
+    item.download_ready = False
+    _update_item(batch, item, message="VAD 싱크 보정 중입니다...")
+    try:
+        subtitles = srt_module.read_srt(item.transcript_path)
+        config = SyncConfig(chunk_mode="individual")
+        segments_source = item.speech_timeline if item.speech_timeline else None
+        synced, stats = sync_subtitles(
+            subtitles,
+            item.source_path,
+            config,
+            precomputed_segments=segments_source,
+        )
+        if stats.get("status") != "success":
+            _update_item(
+                batch,
+                item,
+                message=f"VAD 보정 건너뜀 ({stats.get('status')})",
+            )
+            return
+        synced_content = export_srt(synced)
+        with open(item.transcript_path, "w", encoding="utf-8") as fp:
+            fp.write(synced_content)
+        _update_item(batch, item, message="VAD 싱크 보정을 완료했습니다.")
+    except Exception as exc:
+        _update_item(
+            batch,
+            item,
+            message=f"VAD 싱크 보정 실패: {exc}",
+            error=str(exc),
+        )
+    finally:
+        item.download_ready = bool(item.transcript_path and os.path.isfile(item.transcript_path))
+
+
 def _process_item(batch: WhisperBatch, item: WhisperBatchItem) -> None:
     try:
         storage_key = f"{DEFAULT_STORAGE_KEY}:whisper:{batch.batch_id}:{item.item_id}"
         _update_item(batch, item, status="running", message="세그먼트를 준비하는 중입니다...", progress=0.0)
+        minutes_per_segment = max(batch.chunk_seconds / 60.0, 1 / 60.0)
         segments = split_video_by_minutes(
             input_path=item.source_path,
             output_dir=item.segments_dir,
-            minutes_per_segment=batch.chunk_minutes,
+            minutes_per_segment=minutes_per_segment,
             storage_key=storage_key,
             prefix="segment",
         )
+        aggregated_segments: List[Dict[str, float]] = []
+        for meta in segments:
+            for speech in meta.speech_segments or []:
+                start = float(speech.get("start", meta.start_time))
+                end = float(speech.get("end", meta.end_time))
+                if end <= start:
+                    continue
+                aggregated_segments.append({"start": start, "end": end})
+        aggregated_segments.sort(key=lambda seg: seg["start"])
+        item.speech_timeline = aggregated_segments
         transcript_path = _transcribe_segments(batch, item, segments)
         item.transcript_path = transcript_path
-        _update_item(batch, item, status="completed", progress=1.0, message="전사가 완료되었습니다.")
+        _apply_vad_sync(batch, item)
+        _update_item(batch, item, status="completed", progress=1.0, message="전사 및 싱크 보정이 완료되었습니다.")
     except Exception as exc:
         _update_item(batch, item, status="failed", message=str(exc), error=str(exc))
 
@@ -272,12 +326,12 @@ def _run_batch(batch: WhisperBatch) -> None:
 def create_batch(
     *,
     files: Iterable[Optional[FileStorage]],
-    chunk_minutes: float = 10.0,
+    chunk_seconds: float = 30.0,
 ) -> Dict[str, Any]:
     uploads = _filter_uploads(files)
     if not uploads:
         raise ValueError("업로드할 영상 또는 오디오 파일을 선택해 주세요.")
-    if chunk_minutes <= 0:
+    if chunk_seconds <= 0:
         raise ValueError("청크 길이는 0보다 커야 합니다.")
 
     batch_id = uuid.uuid4().hex
@@ -305,7 +359,7 @@ def create_batch(
 
     batch = WhisperBatch(
         batch_id=batch_id,
-        chunk_minutes=chunk_minutes,
+        chunk_seconds=chunk_seconds,
         base_dir=batch_dir,
         items=items,
     )
