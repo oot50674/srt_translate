@@ -1093,6 +1093,7 @@ def _process_segment_entries(
         },
     )
     _persist_model_history(job.job_id, client)
+    time.sleep(5.0)
     if isinstance(response, str):
         try:
             payload = json.loads(response or "{}")
