@@ -19,24 +19,24 @@
     <div class="relative flex size-full min-h-screen flex-col group/design-root overflow-x-hidden">
         <div class="layout-container flex h-full grow flex-col">
             <header id="page-header" class="flex items-center justify-between whitespace-nowrap border-b border-solid border-b-slate-200 px-10 py-4 bg-white shadow-sm">
-                <div class="flex items-center gap-3 text-slate-900">
-                    <div class="size-7 text-[#0c77f2]">
-                        <svg fill="none" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
-                            <path d="M4 42.4379C4 42.4379 14.0962 36.0744 24 41.1692C35.0664 46.8624 44 42.2078 44 42.2078L44 7.01134C44 7.01134 35.068 11.6577 24.0031 5.96913C14.0971 0.876274 4 7.27094 4 7.27094L4 42.4379Z" fill="currentColor"></path>
-                        </svg>
+                <div class="flex items-center gap-6">
+                    <div class="flex items-center gap-3 text-slate-900">
+                        <div class="size-7 text-[#0c77f2]">
+                            <svg fill="none" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M4 42.4379C4 42.4379 14.0962 36.0744 24 41.1692C35.0664 46.8624 44 42.2078 44 42.2078L44 7.01134C44 7.01134 35.068 11.6577 24.0031 5.96913C14.0971 0.876274 4 7.27094 4 7.27094L4 42.4379Z" fill="currentColor"></path>
+                            </svg>
+                        </div>
+                        <h2 class="text-slate-900 text-xl font-semibold leading-tight tracking-[-0.015em]">자막 번역기</h2>
                     </div>
-                    <a href="/" class="text-slate-900 text-xl font-semibold leading-tight tracking-[-0.015em] hover:text-[#0c77f2] transition-colors cursor-pointer">자막 번역기</a>
-                </div>
-                <div class="flex flex-1 justify-end gap-6">
-                    <nav id="page-nav" class="flex items-center gap-6">
-                        <a class="text-slate-700 hover:text-[#0c77f2] text-sm font-medium leading-normal transition-colors" href="/">자막 번역</a>
+                    <nav class="flex items-center gap-6">
+                        <a class="text-[#0c77f2] text-sm font-semibold leading-normal" href="/">자막 번역</a>
                         <a class="text-slate-700 hover:text-[#0c77f2] text-sm font-medium leading-normal transition-colors" href="/subtitle_generate">LLM 자막 생성</a>
                         <a class="text-slate-700 hover:text-[#0c77f2] text-sm font-medium leading-normal transition-colors" href="/whisper_only">Whisper 전사</a>
-                        <a class="text-[#0c77f2] text-sm font-semibold leading-normal" href="/subtitle_sync">자막 보정 싱크</a>
+                        <a class="text-slate-700 hover:text-[#0c77f2] text-sm font-medium leading-normal transition-colors" href="/subtitle_sync">자막 보정 싱크</a>
                     </nav>
-                    <div class="flex gap-3">
-                        <!-- 버튼들 -->
-                    </div>
+                </div>
+                <div class="flex gap-3">
+                    <!-- 버튼들 -->
                 </div>
             </header>
             
@@ -82,10 +82,6 @@
                     </div>
                 </div>
             </main>
-
-            <footer id="page-footer" class="px-10 py-4 bg-white border-t border-slate-200 text-center text-xs text-slate-500">
-                진행 중인 번역 작업은 이 창에서 자동으로 갱신됩니다.
-            </footer>
         </div>
     </div>
     

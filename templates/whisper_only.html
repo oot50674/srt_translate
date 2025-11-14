@@ -62,13 +62,11 @@
                             <div id="whisper-settings" class="space-y-2">
                                 <label for="whisper-chunk-seconds" class="text-sm font-medium text-slate-700">청크 길이 (초)</label>
                                 <div class="flex flex-col gap-1">
-                                    <input type="number" id="whisper-chunk-seconds" name="chunk_seconds" min="5" step="5" value="30" class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20">
-                                    <p class="text-xs text-slate-500">기본값은 30초입니다. 하나의 발화가 설정한 길이를 넘으면 해당 발화 전체를 하나의 세그먼트로 유지합니다.</p>
+                                    <input type="number" id="whisper-chunk-seconds" name="chunk_seconds" min="5" step="5" value="240" class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20">
                                 </div>
                             </div>
 
                             <div class="flex items-center justify-between flex-wrap gap-3">
-                                <p class="text-xs text-slate-500">파일당 Whisper 전사가 개별 작업으로 실행됩니다.</p>
                                 <button id="whisper-submit-btn" type="submit" class="flex min-w-[160px] items-center justify-center gap-2 rounded-md bg-[#0c77f2] px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-600 disabled:opacity-60 disabled:cursor-not-allowed">
                                     <span id="whisper-submit-spinner" class="material-icons text-base hidden">autorenew</span>
                                     <span id="whisper-submit-text">전사 시작</span>
@@ -80,7 +78,7 @@
             </main>
 
             <footer id="page-footer" class="mt-auto px-10 py-6 bg-white border-t border-slate-200 text-xs text-slate-500 text-center">
-                Whisper-only 전사는 서버 리소스 상황에 따라 시간이 달라질 수 있습니다.
+                Whisper 전사는 호스트 PC 환경에 따라 시간이 달라질 수 있습니다.
             </footer>
         </div>
     </div>
