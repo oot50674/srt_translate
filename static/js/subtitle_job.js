@@ -41,6 +41,7 @@
     let latestJobData = null;
     const selectedSegments = new Set();
     const RETRY_ALLOWED_STATES = new Set(['completed', 'failed']);
+    let autoSelectedErrors = false;
 
     function setAlert(message, type = 'info') {
         if (!alertBox) return;
@@ -250,7 +251,33 @@
         }
     }
 
+    function ensureAutoSelectFailedSegments(job) {
+        if (!job) {
+            return;
+        }
+        if (!TERMINAL_STATES.has(job.status)) {
+            autoSelectedErrors = false;
+            return;
+        }
+        if (autoSelectedErrors) {
+            return;
+        }
+        const segments = job.segments || [];
+        let added = false;
+        segments.forEach(segment => {
+            if (segment.status === 'error' && !selectedSegments.has(segment.index)) {
+                selectedSegments.add(segment.index);
+                added = true;
+            }
+        });
+        if (added) {
+            updateRetryButton(job);
+        }
+        autoSelectedErrors = true;
+    }
+
     function updateJob(job) {
+        ensureAutoSelectFailedSegments(job);
         latestJobData = job;
         const percent = Math.round((job.progress || 0) * 100);
         progressText.textContent = `${percent}%`;
