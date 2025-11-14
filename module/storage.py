@@ -64,6 +64,51 @@ class MemoryStorage:
 default_storage = MemoryStorage()
 
 
+class NamespacedStorage:
+    """특정 prefix를 가진 키만 관리하는 헬퍼."""
+
+    def __init__(self, namespace: str, backend: Optional[MemoryStorage] = None):
+        prefix = (namespace or "").strip()
+        if not prefix:
+            raise ValueError("namespace는 비어 있을 수 없습니다.")
+        if not prefix.endswith(":"):
+            prefix = f"{prefix}:"
+        self._namespace = prefix
+        self._backend = backend or default_storage
+
+    def _make_key(self, key: str) -> str:
+        if key is None:
+            raise ValueError("key는 None일 수 없습니다.")
+        return f"{self._namespace}{key}"
+
+    def set(self, key: str, value: Any) -> None:
+        self._backend.set(self._make_key(key), value)
+
+    def get(self, key: str, default: Optional[Any] = None) -> Any:
+        return self._backend.get(self._make_key(key), default)
+
+    def pop(self, key: str, default: Optional[Any] = None) -> Any:
+        return self._backend.pop(self._make_key(key), default)
+
+    def exists(self, key: str) -> bool:
+        return self._backend.exists(self._make_key(key))
+
+    def keys(self) -> Iterable[str]:
+        prefix = self._namespace
+        return tuple(
+            stored_key[len(prefix):]
+            for stored_key in self._backend.keys()
+            if stored_key.startswith(prefix)
+        )
+
+    def clear(self) -> None:
+        for scoped_key in self.keys():
+            self.pop(scoped_key, None)
+
+
+history_storage = NamespacedStorage("subtitle_history")
+
+
 def set_value(key: str, value: Any) -> None:
     """기본 저장소에 값을 저장합니다."""
 

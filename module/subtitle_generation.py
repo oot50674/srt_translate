@@ -20,7 +20,7 @@ from yt_dlp import YoutubeDL
 from constants import BASE_DIR, DEFAULT_MODEL
 from google.genai import errors as genai_errors
 from module import ffmpeg_module, srt_module
-from module import storage as storage_module
+from module.storage import history_storage
 from module.gemini_module import GeminiClient
 from module.video_split import SegmentMetadata, split_video_by_minutes, DEFAULT_STORAGE_KEY
 from module.Whisper_util import transcribe_audio_with_timestamps
@@ -45,7 +45,6 @@ SUPPORTED_TRANSCRIPTION_MODES = {"transcribe", "translate", "whisper_only"}
 
 SUBTITLE_JOB_ROOT = os.path.join(BASE_DIR, "generated_subtitles")
 os.makedirs(SUBTITLE_JOB_ROOT, exist_ok=True)
-_HISTORY_STORAGE_PREFIX = "subtitle_job_history:"
 _QUOTA_COOLDOWN_SECONDS = 10.0
 
 ENTRY_UPDATE_RESPONSE_SCHEMA: Dict[str, Any] = {
@@ -215,11 +214,14 @@ def _send_gemini_with_retry(
 
 
 def _history_storage_key(job_id: str) -> str:
-    return f"{_HISTORY_STORAGE_PREFIX}{job_id}"
+    job_id = (job_id or "").strip()
+    if not job_id:
+        raise ValueError("job_id is required for history operations.")
+    return job_id
 
 
 def _reset_saved_history(job_id: str) -> None:
-    storage_module.remove_value(_history_storage_key(job_id), None)
+    history_storage.pop(_history_storage_key(job_id), None)
 
 
 def _persist_model_history(job_id: str, client: GeminiClient) -> List[Dict[str, Any]]:
@@ -232,16 +234,25 @@ def _persist_model_history(job_id: str, client: GeminiClient) -> List[Dict[str, 
             model_messages.append(copy.deepcopy(message))
     except Exception:
         model_messages = []
-    storage_module.set_value(_history_storage_key(job_id), model_messages)
+    history_storage.set(_history_storage_key(job_id), model_messages)
     # start_chat 호출 시 외부 변형을 막기 위한 복사본 반환
     return [copy.deepcopy(item) for item in model_messages]
 
 
 def _load_saved_model_history(job_id: str) -> List[Dict[str, Any]]:
-    stored = storage_module.get_value(_history_storage_key(job_id), [])
+    stored = history_storage.get(_history_storage_key(job_id), [])
     if not stored:
         return []
     return [copy.deepcopy(item) for item in stored]
+
+
+def _start_client_with_saved_history(job_id: str, client: GeminiClient, *, reset_usage: bool = True) -> None:
+    """저장된 히스토리를 불러와 클라이언트를 초기화합니다."""
+    history = _load_saved_model_history(job_id)
+    if history:
+        client.start_chat(history=history, suppress_log=True, reset_usage=reset_usage)
+    else:
+        client.start_chat()
 
 
 def _write_srt(entries: List[Dict[str, Any]], dest: str) -> str:
@@ -1245,12 +1256,11 @@ def _retry_segments_whisper(job: SubtitleJob, target_indices: List[int]) -> None
 
 def _retry_segments_worker(job: SubtitleJob, target_indices: List[int]) -> None:
     try:
-        _reset_saved_history(job.job_id)
         if job.mode == "whisper_only":
             _retry_segments_whisper(job, target_indices)
         else:
             client = GeminiClient(model=job.model_name, thinking_budget=-1)
-            client.start_chat()
+            _start_client_with_saved_history(job.job_id, client)
             last_segment_start_at: Optional[float] = None
             processing_label = "번역" if job.mode == "translate" else "전사"
             for segment_index in target_indices:
@@ -1296,7 +1306,6 @@ def _retry_segments_worker(job: SubtitleJob, target_indices: List[int]) -> None:
         )
     finally:
         job.stop_requested = False
-        _reset_saved_history(job.job_id)
 
 
 def retry_segments(job_id: str, segment_indices: Iterable[Any]) -> Dict[str, Any]:
@@ -1439,7 +1448,7 @@ def _run_job(
         else:
             _update_job(job, phase="llm", message="LLM이 영상과 엔트리를 함께 분석합니다.")
             client = GeminiClient(model=job.model_name, thinking_budget=-1)
-            client.start_chat()
+            _start_client_with_saved_history(job.job_id, client)
             last_segment_start_at: Optional[float] = None
             processing_label = "번역" if job.mode == "translate" else "전사"
 
@@ -1493,8 +1502,6 @@ def _run_job(
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.exception("Subtitle job %s failed", job.job_id)
         _update_job(job, status="failed", phase="error", message="작업 중 오류가 발생했습니다.", error=str(exc))
-    finally:
-        _reset_saved_history(job.job_id)
 
 
 __all__ = [
