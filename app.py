@@ -3,11 +3,11 @@ import os
 import tempfile
 import json
 import uuid
-from typing import Optional, Dict, List, Any
+from typing import Optional, Dict, List, Any, Tuple
 from flask import Flask, render_template, request, jsonify, Response, send_file, abort
 from dotenv import load_dotenv
 from module import srt_module, ffmpeg_module
-from module.gemini_module import GeminiClient
+from module.gemini_module import GeminiClientOptions
 from module.subtitle_generation import (
     start_job as start_subtitle_job,
     get_job_data as get_subtitle_job,
@@ -54,6 +54,73 @@ except Exception:
 # .env 로드 설정
 ENV_PATH = os.path.join(BASE_DIR, '.env')
 load_dotenv(dotenv_path=ENV_PATH, override=False)
+
+
+def _safe_int(value, default: int, *, field_name: Optional[str] = None) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        if field_name:
+            logger.warning("%s 파라미터 변환 실패, 기본값 %s 사용: %s", field_name, default, value)
+        return default
+
+
+def _parse_optional_int(value, *, field_name: Optional[str] = None) -> Optional[int]:
+    if value in (None, ''):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        if field_name:
+            logger.warning("%s 파라미터 변환 실패, 값을 무시합니다: %s", field_name, value)
+        return None
+
+
+def _cleanup_temp_paths(temp_paths: List[Tuple[str, str]]) -> None:
+    for _, path in temp_paths:
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            logger.warning("임시 SRT 파일 삭제 실패: %s (%s)", path, exc)
+
+
+def _build_video_context(youtube_url: str) -> Optional[Dict[str, Any]]:
+    url = (youtube_url or '').strip()
+    if not url:
+        return None
+    try:
+        stream_url = ffmpeg_module.get_stream_url(url)
+        duration_seconds = ffmpeg_module.get_duration_seconds(stream_url)
+    except Exception as exc:
+        logger.error("유튜브 스트림 정보 준비 실패: %s", exc)
+        return None
+    return {
+        'youtube_url': url,
+        'stream_url': stream_url,
+        'duration': duration_seconds,
+    }
+
+
+def _build_gemini_options(
+    *,
+    model_name: str,
+    api_key: Optional[str],
+    thinking_budget: int,
+    context_compression_enabled: bool,
+    context_limit: Optional[int],
+) -> GeminiClientOptions:
+    rpm_limit = _safe_int(get_config_value('rpm_limit', 9), 9, field_name='rpm_limit')
+    return GeminiClientOptions(
+        model=model_name,
+        api_key=api_key or None,
+        thinking_budget=thinking_budget,
+        rpm_limit=rpm_limit,
+        context_compression_enabled=context_compression_enabled,
+        context_limit_tokens=context_limit,
+        context_keep_recent=DEFAULT_CONTEXT_KEEP_RECENT,
+    )
 
 
 @app.route('/')
@@ -279,26 +346,14 @@ def api_create_job():
     # 고유 작업 ID 생성
     job_id = str(uuid.uuid4())
     # 배치 크기 파라미터 처리 (기본값 10)
-    batch_size = request.form.get('batch_size', 10)
-    try:
-        batch_size = int(batch_size)
-    except (ValueError, TypeError):
-        batch_size = 10
+    batch_size = _safe_int(request.form.get('batch_size', 10), 10, field_name='batch_size')
     # Thinking Budget 파라미터 처리 (기본값 0)
-    thinking_budget = request.form.get('thinking_budget', 0)
-    try:
-        thinking_budget = int(thinking_budget)
-    except (ValueError, TypeError):
-        thinking_budget = 0
+    thinking_budget = _safe_int(request.form.get('thinking_budget', 0), 0, field_name='thinking_budget')
     # 컨텍스트 압축 설정 처리
     raw_context_compression = (request.form.get('context_compression') or '').strip()
     context_compression = 1 if raw_context_compression in {'1', 'true', 'True', 'on'} else 0
     # 컨텍스트 토큰 제한 처리
-    context_limit = request.form.get('context_limit')
-    try:
-        context_limit = int(context_limit) if context_limit not in (None, '') else None
-    except (ValueError, TypeError):
-        context_limit = None
+    context_limit = _parse_optional_int(request.form.get('context_limit'), field_name='context_limit')
     # API 키 처리 (제공 시 .env에 저장)
     api_key = (request.form.get('api_key') or '').strip()
     if api_key:
@@ -349,7 +404,7 @@ def upload_srt():
     if not files:
         return jsonify({'error': 'file missing'}), 400
 
-    temp_paths = []
+    temp_paths: List[Tuple[str, str]] = []
     for f in files:
         if f.filename == '':
             continue
@@ -366,11 +421,7 @@ def upload_srt():
     logger.info("처리할 SRT 파일들: %s", [name for name, _ in temp_paths])
 
     target_lang = request.form.get('target_lang', '한국어')
-    batch_size = request.form.get('batch_size', 10)
-    try:
-        batch_size = int(batch_size)
-    except (ValueError, TypeError):
-        batch_size = 10
+    batch_size = _safe_int(request.form.get('batch_size', 10), 10, field_name='batch_size')
     user_prompt = request.form.get('custom_prompt', '')
     youtube_url = (request.form.get('youtube_url') or '').strip()
     thinking_budget = request.form.get('thinking_budget', 0)
@@ -379,11 +430,7 @@ def upload_srt():
     job_id = (request.form.get('job_id') or '').strip() or None
     raw_context_compression = (request.form.get('context_compression') or '').strip()
     context_compression_enabled = raw_context_compression in {'1', 'true', 'True', 'on'}
-    context_limit = request.form.get('context_limit')
-    try:
-        context_limit = int(context_limit) if context_limit not in (None, '') else None
-    except (ValueError, TypeError):
-        context_limit = None
+    context_limit = _parse_optional_int(request.form.get('context_limit'), field_name='context_limit')
     # 사용자가 업로드 단계에서 키를 다시 보냈다면 .env에 저장/반영
     if api_key:
         save_api_key_to_env(api_key)
@@ -391,42 +438,20 @@ def upload_srt():
     # 중단 플래그 생성
     stop_flag = {'stopped': False}
 
-    # 모든 파일에서 공유할 단일 클라이언트 생성
-    try:
-        thinking_budget_val = int(thinking_budget)
-    except (ValueError, TypeError):
-        logger.warning("thinking_budget 파라미터 변환 실패, 기본값 0 사용: %s", thinking_budget)
-        thinking_budget_val = 0
-
-    # -1은 auto를 의미하며, thinking_config를 설정하지 않음 (Gemini가 자동 결정)
-    generation_config_extra = {
-        'max_output_tokens': 122880,  # 120k 토큰
-    }
-
-    if thinking_budget_val == -1:
-        logger.info("Thinking Budget이 auto로 설정되었습니다. Gemini가 자동 추론 모드를 사용합니다.")
-        generation_config_extra['thinking_config'] = {'thinking_budget': thinking_budget_val}
-    elif thinking_budget_val > 0:
-        generation_config_extra['thinking_config'] = {'thinking_budget': thinking_budget_val}
+    thinking_budget_val = _safe_int(thinking_budget, 0, field_name='thinking_budget')
+    client_options = _build_gemini_options(
+        model_name=model_name,
+        api_key=api_key if api_key else None,
+        thinking_budget=thinking_budget_val,
+        context_compression_enabled=context_compression_enabled,
+        context_limit=context_limit,
+    )
 
     try:
-        shared_client = GeminiClient(
-            model=model_name,
-            api_key=api_key if api_key else None,
-            thinking_budget=thinking_budget_val,
-            rpm_limit=int(get_config_value('rpm_limit', 9) or 9),
-            generation_config=generation_config_extra,
-            context_compression_enabled=context_compression_enabled,
-            context_limit_tokens=context_limit,
-            context_keep_recent=DEFAULT_CONTEXT_KEEP_RECENT,
-        )
+        shared_client = client_options.create_client()
     except ValueError as exc:
         logger.error("Gemini 클라이언트 초기화 실패: %s", exc)
-        for _, p in temp_paths:
-            try:
-                os.remove(p)
-            except Exception:
-                pass
+        _cleanup_temp_paths(temp_paths)
         return jsonify({'error': str(exc)}), 400
     if thinking_budget_val == -1:
         logger.info("Thinking Budget: auto (Gemini 자동 추론, -1 전달)")
@@ -445,23 +470,12 @@ def upload_srt():
     
     logger.info("다중 파일 처리를 위한 공유 클라이언트가 생성되었습니다.")
 
-    video_context: Optional[Dict[str, Any]] = None
-    if youtube_url:
-        try:
-            stream_url = ffmpeg_module.get_stream_url(youtube_url)
-            duration_seconds = ffmpeg_module.get_duration_seconds(stream_url)
-            video_context = {
-                'youtube_url': youtube_url,
-                'stream_url': stream_url,
-                'duration': duration_seconds,
-            }
-            logger.info(
-                "유튜브 영상 컨텍스트 준비 완료: duration=%.2fs",
-                duration_seconds,
-            )
-        except Exception as exc:
-            logger.error("유튜브 스트림 정보 준비 실패: %s", exc)
-            video_context = None
+    video_context = _build_video_context(youtube_url)
+    if video_context:
+        logger.info(
+            "유튜브 영상 컨텍스트 준비 완료: duration=%.2fs",
+            video_context.get('duration', 0.0),
+        )
 
     def generate():
         try:
@@ -508,12 +522,7 @@ def upload_srt():
             logger.warning("클라이언트 연결이 중단되었습니다. 번역 작업을 중지합니다.")
             stop_flag['stopped'] = True
         finally:
-            # 임시 파일들 정리
-            for _, p in temp_paths:
-                try:
-                    os.remove(p)
-                except:
-                    pass
+            _cleanup_temp_paths(temp_paths)
 
     return Response(generate(), mimetype='text/plain')
 

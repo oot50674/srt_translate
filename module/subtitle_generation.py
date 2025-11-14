@@ -21,7 +21,7 @@ from constants import BASE_DIR, DEFAULT_MODEL
 from google.genai import errors as genai_errors
 from module import ffmpeg_module, srt_module
 from module.storage import history_storage
-from module.gemini_module import GeminiClient
+from module.gemini_module import GeminiClient, sanitize_history_messages
 from module.video_split import SegmentMetadata, split_video_by_minutes, DEFAULT_STORAGE_KEY
 from module.Whisper_util import transcribe_audio_with_timestamps
 from module.subtitle_sync import (
@@ -225,18 +225,14 @@ def _reset_saved_history(job_id: str) -> None:
 
 
 def _persist_model_history(job_id: str, client: GeminiClient) -> List[Dict[str, Any]]:
-    """클라이언트 히스토리에서 모델 응답만 추려 저장합니다."""
-    model_messages: List[Dict[str, Any]] = []
+    """클라이언트 히스토리를 정제하여 저장합니다."""
     try:
-        for message in client.get_history():
-            if message.get("role") != "model":
-                continue
-            model_messages.append(copy.deepcopy(message))
+        sanitized_history = sanitize_history_messages(client.get_history())
     except Exception:
-        model_messages = []
-    history_storage.set(_history_storage_key(job_id), model_messages)
+        sanitized_history = []
+    history_storage.set(_history_storage_key(job_id), sanitized_history)
     # start_chat 호출 시 외부 변형을 막기 위한 복사본 반환
-    return [copy.deepcopy(item) for item in model_messages]
+    return [copy.deepcopy(item) for item in sanitized_history]
 
 
 def _load_saved_model_history(job_id: str) -> List[Dict[str, Any]]:

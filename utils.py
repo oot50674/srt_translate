@@ -10,7 +10,7 @@ import shutil
 
 from constants import HISTORY_LOG_DIR, SNAPSHOT_ROOT_DIR, DEFAULT_CONTEXT_KEEP_RECENT, BASE_DIR
 from module import ffmpeg_module
-from module.gemini_module import GeminiClient
+from module.gemini_module import GeminiClient, sanitize_history_messages
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +99,7 @@ def save_history_log(client: GeminiClient, job_id: Optional[str] = None) -> None
             job_label = 'session'
         filename = f"history_{job_label}_{timestamp}.json"
         path = os.path.join(HISTORY_LOG_DIR, filename)
-        history = client.get_history()
+        history = sanitize_history_messages(client.get_history())
         with open(path, 'w', encoding='utf-8') as fp:
             json.dump(history, fp, ensure_ascii=False, indent=2)
         logger.info(

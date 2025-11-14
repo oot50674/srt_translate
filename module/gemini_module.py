@@ -1,13 +1,16 @@
+import copy
 import os
 import time
 import json
 from collections import deque
+from dataclasses import dataclass
 from typing import Iterator, Dict, Any, Optional, List, Union, Sequence, cast
 import logging
 from google import genai
 from google.genai import types
 from google.genai import errors
 from dotenv import load_dotenv
+from constants import DEFAULT_CONTEXT_KEEP_RECENT
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
@@ -1385,4 +1388,136 @@ class GeminiClient:
             parts.append({"file_data": {"file_uri": file_uri, "mime_type": mime_type}})
 
         return parts
+
+
+def _strip_translation_prompt(text: str) -> Optional[str]:
+    marker = "번역할 자막들:"
+    idx = text.find(marker)
+    if idx == -1:
+        return None
+    prefix = text[:idx].rstrip()
+    remainder = text[idx + len(marker):]
+    entries_section = remainder
+    for stop in ("\n\n주의사항", "\n주의사항"):
+        stop_idx = entries_section.find(stop)
+        if stop_idx != -1:
+            entries_section = entries_section[:stop_idx]
+            break
+    entries_section = entries_section.strip()
+    if prefix:
+        instr_idx = prefix.find("다음 자막들을")
+        if instr_idx != -1:
+            prefix = prefix[:instr_idx].rstrip()
+    sections: List[str] = []
+    cleaned_prefix = prefix.strip()
+    if cleaned_prefix:
+        sections.append(cleaned_prefix)
+    if entries_section:
+        sections.append(f"번역할 자막들:\n{entries_section}")
+    if not sections:
+        return None
+    return "\n\n".join(sections)
+
+
+def _strip_generic_entries(text: str) -> Optional[str]:
+    marker = "Entries:"
+    idx = text.find(marker)
+    if idx == -1:
+        return None
+    entries_section = text[idx:].strip()
+    return entries_section or None
+
+
+def _sanitize_user_text(text: str) -> str:
+    trimmed = text.strip()
+    if not trimmed:
+        return ""
+    translation_payload = _strip_translation_prompt(trimmed)
+    if translation_payload:
+        return translation_payload
+    generic_entries_payload = _strip_generic_entries(trimmed)
+    if generic_entries_payload:
+        return generic_entries_payload
+    return trimmed
+
+
+def _sanitize_history_part(part: Dict[str, Any], role: Optional[str]) -> Optional[Dict[str, Any]]:
+    if not isinstance(part, dict):
+        return None
+    if "text" in part and isinstance(part["text"], str):
+        text_value = part["text"]
+        cleaned_text = _sanitize_user_text(text_value) if role == "user" else text_value.strip()
+        if cleaned_text:
+            return {"text": cleaned_text}
+        return None
+    if role == "model":
+        if "function_call" in part:
+            return {"function_call": copy.deepcopy(part["function_call"])}
+        if "tool_response" in part:
+            return {"tool_response": copy.deepcopy(part["tool_response"])}
+    return None
+
+
+def _sanitize_history_message(message: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    role = message.get("role")
+    parts = message.get("parts")
+    if not isinstance(parts, list):
+        return None
+    sanitized_parts: List[Dict[str, Any]] = []
+    for part in parts:
+        sanitized_part = _sanitize_history_part(part, role)
+        if sanitized_part:
+            sanitized_parts.append(sanitized_part)
+    if not sanitized_parts:
+        return None
+    return {
+        "role": role,
+        "parts": sanitized_parts,
+    }
+
+
+def sanitize_history_messages(history: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    """Gemini 히스토리를 저장/로그용으로 정제합니다."""
+
+    sanitized: List[Dict[str, Any]] = []
+    if not history:
+        return sanitized
+    for message in history:
+        sanitized_message = _sanitize_history_message(message)
+        if sanitized_message:
+            sanitized.append(sanitized_message)
+    return sanitized
+
+
+@dataclass
+class GeminiClientOptions:
+    """GeminiClient 생성을 위한 공용 옵션 묶음."""
+
+    model: str = "gemini-flash-latest"
+    api_key: Optional[str] = None
+    thinking_budget: int = 0
+    rpm_limit: int = 9
+    max_output_tokens: int = 122880
+    context_compression_enabled: bool = False
+    context_limit_tokens: Optional[int] = None
+    context_keep_recent: int = DEFAULT_CONTEXT_KEEP_RECENT
+
+    def build_generation_config(self) -> Dict[str, Any]:
+        return {
+            "max_output_tokens": self.max_output_tokens,
+        }
+
+    def create_client(self) -> "GeminiClient":
+        """옵션에 맞춰 GeminiClient 인스턴스를 만듭니다."""
+
+        return GeminiClient(
+            model=self.model,
+            api_key=self.api_key,
+            thinking_budget=self.thinking_budget,
+            rpm_limit=self.rpm_limit,
+            generation_config=self.build_generation_config(),
+            context_compression_enabled=self.context_compression_enabled,
+            context_limit_tokens=self.context_limit_tokens,
+            context_keep_recent=self.context_keep_recent,
+        )
 
