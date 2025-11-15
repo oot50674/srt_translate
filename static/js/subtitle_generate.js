@@ -228,6 +228,9 @@
         }
     }
 
+    const MAX_SERVER_ERROR_RETRIES = 2;
+    const SERVER_ERROR_STATUS = 500;
+
     async function submitForm(event) {
         event.preventDefault();
         if (!form) return;
@@ -241,19 +244,34 @@
         setSubmitting(true);
         showAlert('');
         try {
-            const response = await fetch('/api/subtitle/jobs', {
-                method: 'POST',
-                body: formData
-            });
-            const payload = await response.json().catch(() => ({}));
-            if (!response.ok) {
-                throw new Error(payload.error || '자막 생성 요청을 처리하지 못했습니다.');
+            const maxAttempts = MAX_SERVER_ERROR_RETRIES + 1;
+            let payload = {};
+            for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+                const response = await fetch('/api/subtitle/jobs', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (response.status === SERVER_ERROR_STATUS && attempt <= MAX_SERVER_ERROR_RETRIES) {
+                    console.warn(`자막 생성 요청이 500 오류로 실패했습니다. 재시도 (${attempt}/${MAX_SERVER_ERROR_RETRIES})`);
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    continue;
+                }
+
+                payload = await response.json().catch(() => ({}));
+                if (!response.ok) {
+                    throw new Error(payload.error || '자막 생성 요청을 처리하지 못했습니다.');
+                }
+
+                const jobId = payload.job_id;
+                if (jobId) {
+                    showAlert('작업이 시작되었습니다. 잠시 후 진행 화면으로 이동합니다.', 'success');
+                    window.location.href = `/subtitle_jobs/${encodeURIComponent(jobId)}`;
+                }
+                return;
             }
-            const jobId = payload.job_id;
-            if (jobId) {
-                showAlert('작업이 시작되었습니다. 잠시 후 진행 화면으로 이동합니다.', 'success');
-                window.location.href = `/subtitle_jobs/${encodeURIComponent(jobId)}`;
-            }
+
+            throw new Error(payload.error || '자막 생성 요청을 처리하지 못했습니다.');
         } catch (err) {
             console.error(err);
             showAlert(err.message || '요청 중 오류가 발생했습니다.', 'error');
