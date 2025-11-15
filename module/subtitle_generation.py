@@ -166,6 +166,16 @@ def _get_retry_delay_seconds_from_error(error: Exception) -> Optional[float]:
     return None
 
 
+def _is_server_error(error: Exception) -> bool:
+    """Return True when the exception indicates a 5xx server error."""
+    code_raw = getattr(error, "code", None)
+    try:
+        code = int(code_raw)
+    except (TypeError, ValueError):
+        return False
+    return 500 <= code < 600
+
+
 def _send_gemini_with_retry(
     client: GeminiClient,
     *,
@@ -175,26 +185,35 @@ def _send_gemini_with_retry(
     max_attempts: int = 3,
 ) -> Any:
     last_error: Optional[Exception] = None
-    non_resource_retry_done = False
     for attempt in range(1, max_attempts + 1):
         try:
             return client.send_message(**send_kwargs)
         except genai_errors.ClientError as exc:
             last_error = exc
             error_text = str(exc)
-            non_resource_retry_done = True
-            retry_delay = _get_retry_delay_seconds_from_error(exc)
-            wait_seconds = max(5.0, (retry_delay or 0.0) + 5.0)
-            warning_text = (
-                f"{context} 중 오류가 발생했습니다: {error_text}. "
-                f"{wait_seconds:.1f}초 후 재시도합니다."
-            )
+            retry_delay = _get_retry_delay_seconds_from_error(exc) or 0.0
+            wait_seconds = max(0.0, retry_delay)
+            server_error = isinstance(exc, genai_errors.APIError) and _is_server_error(exc)
+            if wait_seconds > 0:
+                warning_text = (
+                    f"{context} 중 오류가 발생했습니다: {error_text}. "
+                    f"{wait_seconds:.1f}초 후 재시도합니다."
+                )
+            elif server_error:
+                code_display = getattr(exc, "code", "5xx")
+                warning_text = (
+                    f"{context} 중 서버 오류(HTTP {code_display})가 발생했습니다: {error_text}. "
+                    "Gemini 모듈에서 30초 대기 후 재시도합니다."
+                )
+            else:
+                warning_text = f"{context} 중 오류가 발생했습니다: {error_text}. 즉시 재시도합니다."
             logger.warning(warning_text)
             try:
                 job.append_log(warning_text, level="warning")
             except Exception:
                 pass
-            time.sleep(wait_seconds)
+            if wait_seconds > 0:
+                time.sleep(wait_seconds)
             continue
         except Exception as exc:
             last_error = exc
