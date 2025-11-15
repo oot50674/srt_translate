@@ -499,6 +499,22 @@ class GeminiClient:
         # 현재 요청 시간 기록
         self.request_times.append(current_time)
 
+    def _maybe_wait_for_server_recovery(self, error: errors.APIError) -> None:
+        """서버(500번대) 오류 발생 시 재시도를 대비해 잠시 대기합니다."""
+        code_raw = getattr(error, 'code', None)
+        try:
+            code = int(code_raw)
+        except (TypeError, ValueError):
+            code = None
+
+        if code is not None and 500 <= code < 600:
+            logger.warning(
+                "서버 오류(%s %s) 발생으로 30초 대기합니다.",
+                code,
+                getattr(error, 'status', 'UNKNOWN'),
+            )
+            time.sleep(30)
+
     def _estimate_text_tokens(self, text: str) -> int:
         """간단한 휴리스틱으로 텍스트 토큰 수를 추정합니다."""
         if not text:
@@ -889,6 +905,7 @@ class GeminiClient:
             # 오류 발생 시 추가한 사용자 메시지 롤백
             self.history.pop()
             logger.error(f"Google API 호출 오류: {e}")
+            self._maybe_wait_for_server_recovery(e)
             raise
         except Exception as e:
             # 오류 발생 시 추가한 사용자 메시지 롤백
@@ -1043,6 +1060,7 @@ class GeminiClient:
             # 오류 발생 시 추가한 사용자 메시지 롤백
             self.history.pop()
             logger.error(f"Google API 호출 오류(스트리밍): {e}")
+            self._maybe_wait_for_server_recovery(e)
             raise
         except Exception as e:
             # 오류 발생 시 추가한 사용자 메시지 롤백
