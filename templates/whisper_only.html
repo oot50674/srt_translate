@@ -9,6 +9,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Work+Sans:wght@400;500;600;700&family=Noto+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet" />
+    <link href="{{ url_for('static', filename='css/toast.css') }}" rel="stylesheet" />
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
 
@@ -42,7 +43,6 @@
                             <p class="text-sm text-slate-600">LLM 없이 Whisper 전사만 빠르게 실행합니다. 여러 영상 또는 오디오 파일을 한 번에 업로드할 수 있습니다.</p>
                         </header>
 
-                        <div id="whisper-alert" class="hidden rounded-lg border px-4 py-3 text-sm"></div>
 
                         <form id="whisper-upload-form" class="space-y-6" enctype="multipart/form-data">
                             <div class="space-y-3">
@@ -83,6 +83,7 @@
         </div>
     </div>
 
+    <script src="{{ url_for('static', filename='js/toast.js') }}"></script>
     <script src="{{ url_for('static', filename='js/whisper_only.js') }}" defer></script>
 </body>
 

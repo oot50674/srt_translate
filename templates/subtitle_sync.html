@@ -9,6 +9,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Work+Sans:wght@400;500;600;700&family=Noto+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet" />
+    <link href="{{ url_for('static', filename='css/toast.css') }}" rel="stylesheet" />
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
 
@@ -247,18 +248,6 @@
                                 readonly></textarea>
                         </div>
 
-                        <!-- 에러 표시 -->
-                        <div id="error-section" class="hidden mb-6">
-                            <div class="rounded-lg border border-red-300 bg-red-50 px-4 py-3">
-                                <div class="flex items-start gap-3">
-                                    <span class="material-icons text-red-600">error</span>
-                                    <div>
-                                        <h4 class="text-red-900 font-semibold text-sm mb-1">처리 중 오류 발생</h4>
-                                        <p id="error-message" class="text-red-700 text-sm"></p>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
                     </div>
 
                     <!-- 사용 안내 -->
@@ -293,6 +282,7 @@
     </div>
 
     <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <script src="{{ url_for('static', filename='js/toast.js') }}"></script>
     <script src="{{ url_for('static', filename='js/subtitle_sync.js') }}" defer></script>
 </body>
 

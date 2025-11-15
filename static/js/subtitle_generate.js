@@ -2,7 +2,6 @@
     const form = document.getElementById('subtitle-generate-form');
     const modeRadios = document.querySelectorAll('input[name="transcription_mode"]');
     const translationLanguage = document.getElementById('translation-language');
-    const alertBox = document.getElementById('subtitle-generate-alert');
     const submitBtn = document.getElementById('subtitle-submit-btn');
     const submitSpinner = document.getElementById('subtitle-submit-spinner');
     const submitText = document.getElementById('subtitle-submit-text');
@@ -27,20 +26,15 @@
     };
 
     function showAlert(message, type = 'error') {
-        if (!alertBox) return;
-        if (!message) {
-            alertBox.classList.add('hidden');
-            alertBox.textContent = '';
-            return;
+        if (!message) return;
+
+        if (type === 'success') {
+            Toast.info(message, { position: 'top-center' });
+        } else if (type === 'warning') {
+            Toast.alert(message, { position: 'top-center', ariaLive: 'assertive' });
+        } else {
+            Toast.alert(message, { position: 'top-center', ariaLive: 'assertive' });
         }
-        const palette = type === 'success'
-            ? 'text-emerald-800 bg-emerald-50 border-emerald-200'
-            : type === 'warning'
-                ? 'text-amber-800 bg-amber-50 border-amber-300'
-                : 'text-red-800 bg-red-50 border-red-200';
-        alertBox.className = `rounded-lg border px-4 py-3 text-sm mb-6 ${palette}`;
-        alertBox.textContent = message;
-        alertBox.classList.remove('hidden');
     }
 
     function setSubmitting(isSubmitting) {
@@ -405,8 +399,7 @@
             customPromptInput.value = '';
             localStorage.removeItem(STORAGE_KEYS.custom_prompt);
             updateClearButtonVisibility();
-            showAlert('저장된 프롬프트를 삭제했습니다.', 'success');
-            setTimeout(() => showAlert(''), 2000);
+            Toast.info('저장된 프롬프트를 삭제했습니다.', { position: 'top-center' });
         } catch (e) {
             console.warn('Failed to clear custom prompt from localStorage:', e);
         }

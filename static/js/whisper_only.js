@@ -6,7 +6,6 @@
     const fileInput = document.getElementById('whisper-file-input');
     const selectBtn = document.getElementById('whisper-select-btn');
     const fileList = document.getElementById('whisper-file-list');
-    const alertBox = document.getElementById('whisper-alert');
     const submitBtn = document.getElementById('whisper-submit-btn');
     const submitSpinner = document.getElementById('whisper-submit-spinner');
     const submitText = document.getElementById('whisper-submit-text');
@@ -15,18 +14,13 @@
     const STORAGE_KEY = 'whisper_chunk_seconds';
 
     function showAlert(message, type = 'error') {
-        if (!alertBox) return;
-        if (!message) {
-            alertBox.classList.add('hidden');
-            alertBox.textContent = '';
-            return;
+        if (!message) return;
+
+        if (type === 'success') {
+            Toast.info(message, { position: 'top-center' });
+        } else {
+            Toast.alert(message, { position: 'top-center', ariaLive: 'assertive' });
         }
-        const palette = type === 'success'
-            ? 'text-emerald-800 bg-emerald-50 border-emerald-200'
-            : 'text-red-800 bg-red-50 border-red-200';
-        alertBox.className = `rounded-lg border px-4 py-3 text-sm ${palette}`;
-        alertBox.textContent = message;
-        alertBox.classList.remove('hidden');
     }
 
     function setSubmitting(isSubmitting) {

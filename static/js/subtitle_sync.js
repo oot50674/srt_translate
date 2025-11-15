@@ -17,9 +17,7 @@ $(document).ready(function () {
     const $progressText = $('#progress-text');
     const $statsSection = $('#stats-section');
     const $resultSection = $('#result-section');
-    const $errorSection = $('#error-section');
     const $resultSrt = $('#result-srt');
-    const $errorMessage = $('#error-message');
 
     // 통계 요소
     const $statEntries = $('#stat-entries');
@@ -46,17 +44,15 @@ $(document).ready(function () {
      * 에러 표시
      */
     function showError(message) {
-        $errorSection.removeClass('hidden');
-        $errorMessage.text(message);
+        Toast.alert(message, { position: 'top-center', ariaLive: 'assertive' });
         $progressSection.addClass('hidden');
     }
 
     /**
-     * 에러 숨기기
+     * 에러 숨기기 (더 이상 사용하지 않음)
      */
     function hideError() {
-        $errorSection.addClass('hidden');
-        $errorMessage.text('');
+        // Toast는 자동으로 사라지므로 별도 처리 불필요
     }
 
     /**
@@ -223,7 +219,7 @@ $(document).ready(function () {
      */
     function downloadSrt() {
         if (!correctedSrtContent) {
-            alert('다운로드할 자막이 없습니다.');
+            Toast.alert('다운로드할 자막이 없습니다.', { position: 'top-center', ariaLive: 'assertive' });
             return;
         }
 
