@@ -341,13 +341,21 @@ def api_retry_subtitle_segments(job_id: str):
 @app.route('/api/whisper/batch', methods=['POST'])
 def api_create_whisper_batch():
     files = request.files.getlist('media_files')
+    youtube_urls = request.form.getlist('youtube_urls') or []
+    single_url = (request.form.get('youtube_url') or '').strip()
+    if single_url:
+        youtube_urls.append(single_url)
     chunk_seconds_raw = request.form.get('chunk_seconds') or 30
     try:
         chunk_seconds = float(chunk_seconds_raw)
     except (TypeError, ValueError):
         chunk_seconds = 30.0
     try:
-        batch = create_whisper_batch(files=files, chunk_seconds=chunk_seconds)
+        batch = create_whisper_batch(
+            files=files,
+            chunk_seconds=chunk_seconds,
+            youtube_urls=youtube_urls,
+        )
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400
     except Exception:

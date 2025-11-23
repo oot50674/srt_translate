@@ -45,7 +45,21 @@
 
 
                         <form id="whisper-upload-form" class="space-y-6" enctype="multipart/form-data">
-                            <div class="space-y-3">
+                            <div id="whisper-youtube-block" class="space-y-3">
+                                <label for="whisper-youtube-input" class="text-sm font-medium text-slate-700">YouTube 링크</label>
+                                <div class="flex flex-col gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-4">
+                                    <div class="flex flex-col gap-2 md:flex-row">
+                                        <input type="url" id="whisper-youtube-input" name="youtube_url" placeholder="https://www.youtube.com/watch?v=..." class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20">
+                                        <button id="whisper-youtube-add-btn" type="button" class="mt-2 md:mt-0 md:ml-3 flex items-center justify-center whitespace-nowrap rounded-md bg-[#0c77f2] px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-600">
+                                            링크 추가
+                                        </button>
+                                    </div>
+                                    <p class="text-xs text-slate-500">링크와 파일을 함께 추가할 수 있으며, 여러 링크도 입력할 수 있습니다.</p>
+                                    <div id="whisper-youtube-list" class="hidden flex flex-col gap-2 rounded-md border border-slate-200 bg-white px-3 py-2"></div>
+                                </div>
+                            </div>
+
+                            <div id="whisper-file-block" class="space-y-3">
                                 <label for="whisper-file-input" class="text-sm font-medium text-slate-700">영상/오디오 파일</label>
                                 <div id="whisper-drop-zone" class="flex flex-col items-center justify-center gap-4 rounded-lg border-2 border-dashed border-slate-300 px-6 py-10 text-center bg-slate-50 hover:border-slate-400 transition-colors cursor-pointer">
                                     <span class="material-icons text-4xl text-slate-500">upload_file</span>
@@ -66,7 +80,7 @@
                                 </div>
                             </div>
 
-                            <div class="flex items-center justify-between flex-wrap gap-3">
+                            <div class="flex items-center justify-end flex-wrap gap-3">
                                 <button id="whisper-submit-btn" type="submit" class="flex min-w-[160px] items-center justify-center gap-2 rounded-md bg-[#0c77f2] px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-600 disabled:opacity-60 disabled:cursor-not-allowed">
                                     <span id="whisper-submit-spinner" class="material-icons text-base hidden">autorenew</span>
                                     <span id="whisper-submit-text">전사 시작</span>

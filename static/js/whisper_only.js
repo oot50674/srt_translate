@@ -11,6 +11,7 @@
     const submitText = document.getElementById('whisper-submit-text');
     const chunkSecondsInput = document.getElementById('whisper-chunk-seconds');
     const selectedFiles = [];
+    const youtubeUrls = [];
     const STORAGE_KEY = 'whisper_chunk_seconds';
 
     function showAlert(message, type = 'error') {
@@ -91,6 +92,39 @@
         }
     }
 
+    function renderYoutubeList() {
+        const list = document.getElementById('whisper-youtube-list');
+        if (!list) return;
+        if (!youtubeUrls.length) {
+            list.classList.add('hidden');
+            list.innerHTML = '';
+            return;
+        }
+        list.classList.remove('hidden');
+        list.innerHTML = youtubeUrls
+            .map((url, index) => `
+                <div class="flex items-center justify-between rounded-md border border-slate-200 bg-slate-50 px-3 py-2 gap-3">
+                    <div class="flex flex-col text-left">
+                        <p class="text-sm font-semibold text-slate-800 break-all">${url}</p>
+                        <span class="text-xs text-slate-500">YouTube</span>
+                    </div>
+                    <button type="button" class="remove-youtube-btn text-slate-400 hover:text-slate-600" data-url-index="${index}">
+                        <span class="material-icons text-base">close</span>
+                    </button>
+                </div>
+            `)
+            .join('');
+        list.querySelectorAll('.remove-youtube-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const idx = Number(btn.dataset.urlIndex);
+                if (!Number.isNaN(idx)) {
+                    youtubeUrls.splice(idx, 1);
+                    renderYoutubeList();
+                }
+            });
+        });
+    }
+
     function handleNewFiles(files) {
         if (!files?.length) return;
         Array.from(files).forEach(file => selectedFiles.push(file));
@@ -152,10 +186,53 @@
         });
     }
 
+    function addYoutubeUrlFromInput() {
+        const input = document.getElementById('whisper-youtube-input');
+        if (!input) return;
+        const raw = (input.value || '').trim();
+        if (!raw) {
+            showAlert('YouTube 링크를 입력해 주세요.');
+            input.focus();
+            return;
+        }
+        const urlPattern = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\//i;
+        if (!urlPattern.test(raw)) {
+            showAlert('올바른 YouTube 링크를 입력해 주세요.');
+            input.focus();
+            return;
+        }
+        const normalized = raw.replace(/^\s+|\s+$/g, '');
+        if (youtubeUrls.includes(normalized)) {
+            showAlert('이미 추가된 링크입니다.');
+            input.value = '';
+            return;
+        }
+        youtubeUrls.push(normalized);
+        input.value = '';
+        renderYoutubeList();
+        showAlert('');
+    }
+
+    function bindYoutubeControls() {
+        const addBtn = document.getElementById('whisper-youtube-add-btn');
+        const input = document.getElementById('whisper-youtube-input');
+        if (addBtn) {
+            addBtn.addEventListener('click', addYoutubeUrlFromInput);
+        }
+        if (input) {
+            input.addEventListener('keydown', event => {
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    addYoutubeUrlFromInput();
+                }
+            });
+        }
+    }
+
     async function handleSubmit(event) {
         event.preventDefault();
-        if (!selectedFiles.length) {
-            showAlert('최소 한 개 이상의 파일을 선택해 주세요.');
+        if (!selectedFiles.length && !youtubeUrls.length) {
+            showAlert('파일을 추가하거나 YouTube 링크를 입력해 주세요.');
             return;
         }
         const chunkSecondsValue = parseFloat(chunkSecondsInput?.value || '30');
@@ -168,6 +245,9 @@
         const formData = new FormData();
         selectedFiles.forEach(file => {
             formData.append('media_files', file);
+        });
+        youtubeUrls.forEach(url => {
+            formData.append('youtube_urls', url);
         });
         formData.append('chunk_seconds', String(chunkSecondsValue));
 
@@ -197,6 +277,7 @@
 
     bindDropZone();
     bindSelectBtn();
+    bindYoutubeControls();
     loadStoredChunkSeconds();
     form.addEventListener('submit', handleSubmit);
 })();
