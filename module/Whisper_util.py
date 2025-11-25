@@ -7,6 +7,7 @@ CUDA 지원 여부에 따라 GPU large-v3-turbo 또는 CPU tiny 모델을 사용
 
 import os
 import time
+import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 try:  # whisper가 설치되지 않은 환경에서도 모듈 임포트가 가능하도록 처리
@@ -113,6 +114,31 @@ class WhisperUtil:
             print(f"모델 로딩 실패: {e}")
             raise
 
+    def _ensure_model_loaded(self) -> None:
+        """
+        현재 모델이 로드되어 있지 않으면 새로 로드합니다.
+        """
+        if self.model is None:
+            self._load_model()
+
+    def unload_model(self) -> None:
+        """
+        로드된 Whisper 모델을 언로드하여 GPU/메모리를 반환합니다.
+        """
+        if self.model is None:
+            return
+        try:
+            import torch  # type: ignore
+        except ImportError:
+            torch = None
+        self.model = None
+        if torch is not None:
+            try:
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
+        print("Whisper 모델을 언로드했습니다.")
+
     def transcribe_audio(
         self,
         audio_path: str,
@@ -140,6 +166,7 @@ class WhisperUtil:
         if not os.path.exists(audio_path):
             raise FileNotFoundError(f"음성 파일을 찾을 수 없습니다: {audio_path}")
 
+        self._ensure_model_loaded()
         if self.model is None:
             raise Exception("모델이 로드되지 않았습니다.")
 
@@ -257,6 +284,7 @@ class WhisperUtil:
 
 # 전역 인스턴스 (싱글톤 패턴)
 _whisper_instance: Optional[WhisperUtil] = None
+_whisper_lock = threading.Lock()
 
 
 def get_whisper_util() -> WhisperUtil:
@@ -267,9 +295,25 @@ def get_whisper_util() -> WhisperUtil:
         WhisperUtil: Whisper 유틸리티 인스턴스
     """
     global _whisper_instance
-    if _whisper_instance is None:
-        _whisper_instance = WhisperUtil()
-    return _whisper_instance
+    with _whisper_lock:
+        if _whisper_instance is None:
+            _whisper_instance = WhisperUtil()
+        return _whisper_instance
+
+
+def unload_whisper_util() -> None:
+    """
+    글로벌 Whisper 인스턴스를 해제합니다.
+    """
+    global _whisper_instance
+    with _whisper_lock:
+        if _whisper_instance is None:
+            return
+        try:
+            _whisper_instance.unload_model()
+        except Exception:
+            pass
+        _whisper_instance = None
 
 
 def transcribe_audio_file(audio_path: str, language: Optional[str] = None, show_progress: bool = True) -> str:

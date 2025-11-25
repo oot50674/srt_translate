@@ -23,7 +23,7 @@ from module import ffmpeg_module, srt_module
 from module.storage import history_storage
 from module.gemini_module import GeminiClient, sanitize_history_messages
 from module.video_split import SegmentMetadata, split_video_by_minutes, DEFAULT_STORAGE_KEY
-from module.Whisper_util import transcribe_audio_with_timestamps
+from module.Whisper_util import transcribe_audio_with_timestamps, unload_whisper_util
 from module.subtitle_sync import (
     SyncConfig,
     SubtitleEntry as SyncSubtitleEntry,
@@ -1480,6 +1480,8 @@ def _run_job(
     except Exception as exc:  # pragma: no cover - defensive logging
         logger.exception("Subtitle job %s failed", job.job_id)
         _update_job(job, status="failed", phase="error", message="작업 중 오류가 발생했습니다.", error=str(exc))
+    finally:
+        unload_whisper_util()
 
 
 __all__ = [

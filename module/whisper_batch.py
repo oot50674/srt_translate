@@ -35,6 +35,7 @@ _BATCHES: Dict[str, "WhisperBatch"] = {}
 _LOCK = threading.RLock()
 _WHISPER_LOCK = threading.Lock()
 _WHISPER_INSTANCE: Optional[WhisperUtil] = None
+_ACTIVE_BATCHES = 0
 
 
 def _get_whisper() -> WhisperUtil:
@@ -43,6 +44,33 @@ def _get_whisper() -> WhisperUtil:
         if _WHISPER_INSTANCE is None:
             _WHISPER_INSTANCE = WhisperUtil()
         return _WHISPER_INSTANCE
+
+
+def _increment_active_batches() -> None:
+    global _ACTIVE_BATCHES
+    with _LOCK:
+        _ACTIVE_BATCHES += 1
+
+
+def _unload_whisper() -> None:
+    global _WHISPER_INSTANCE
+    with _WHISPER_LOCK:
+        if _WHISPER_INSTANCE is None:
+            return
+        try:
+            _WHISPER_INSTANCE.unload_model()
+        except Exception:
+            pass
+        _WHISPER_INSTANCE = None
+
+
+def _decrement_active_batches() -> None:
+    global _ACTIVE_BATCHES
+    with _LOCK:
+        if _ACTIVE_BATCHES > 0:
+            _ACTIVE_BATCHES -= 1
+        if _ACTIVE_BATCHES == 0:
+            _unload_whisper()
 
 
 def _ensure_dir(path: str) -> str:
@@ -486,6 +514,7 @@ def _process_item(batch: WhisperBatch, item: WhisperBatchItem) -> None:
 
 
 def _run_batch(batch: WhisperBatch) -> None:
+    _increment_active_batches()
     try:
         for item in batch.items:
             if item.status == "completed":
@@ -497,6 +526,7 @@ def _run_batch(batch: WhisperBatch) -> None:
         raise
     finally:
         batch.touch()
+        _decrement_active_batches()
 
 
 def create_batch(

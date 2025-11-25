@@ -270,14 +270,15 @@ def filter_short_segments(
 
 
 def _compute_overlap_ms(
-    entry: SubtitleEntry,
-    segments_ms: List[Tuple[float, float]]
+    entry_start_ms: float,
+    entry_end_ms: float,
+    segments_ms: List[Tuple[float, float]],
 ) -> float:
-    """자막 엔트리와 VAD 세그먼트들의 겹치는 길이 계산 (밀리초)"""
+    """자막 구간과 VAD 세그먼트들의 겹치는 길이 계산 (밀리초)"""
     overlap_ms = 0.0
     for seg_start_ms, seg_end_ms in segments_ms:
-        start = max(entry.start_ms, seg_start_ms)
-        end = min(entry.end_ms, seg_end_ms)
+        start = max(entry_start_ms, seg_start_ms)
+        end = min(entry_end_ms, seg_end_ms)
         if end > start:
             overlap_ms += end - start
     return overlap_ms
@@ -312,18 +313,38 @@ def remove_silent_entries(
         return entries, 0
 
     filtered: List[SubtitleEntry] = []
+    sorted_entries = sorted(entries, key=lambda e: e.index)
     removed = 0
 
-    for entry in entries:
-        # 짧은 엔트리는 그대로 유지해 VAD 누락에 의한 삭제를 방지
-        if entry.duration_ms < config.min_silence_entry_duration_ms:
-            filtered.append(entry)
+    for idx, entry in enumerate(sorted_entries):
+        next_entry = sorted_entries[idx + 1] if idx + 1 < len(sorted_entries) else None
+
+        adjusted_end = entry.end_ms
+        if next_entry and entry.end_ms > next_entry.start_ms:
+            # 겹치는 경우 다음 엔트리 시작점까지로 잘라서 커버리지 평가 및 결과 반영
+            adjusted_end = max(entry.start_ms, next_entry.start_ms)
+
+        effective_duration_ms = adjusted_end - entry.start_ms
+        if effective_duration_ms <= 0:
+            adjusted_end = entry.start_ms + 1
+            effective_duration_ms = 1
+
+        # 짧은 엔트리는 그대로 유지해 VAD 누락에 의한 삭제를 방지 (단, 겹침 보정된 end를 반영)
+        if effective_duration_ms < config.min_silence_entry_duration_ms:
+            filtered.append(
+                SubtitleEntry(
+                    index=entry.index,
+                    start_ms=entry.start_ms,
+                    end_ms=adjusted_end,
+                    text=entry.text,
+                )
+            )
             continue
 
-        overlap_ms = _compute_overlap_ms(entry, segments_ms)
+        overlap_ms = _compute_overlap_ms(entry.start_ms, adjusted_end, segments_ms)
         coverage_threshold_ms = max(
             config.min_vad_coverage_ms,
-            entry.duration_ms * config.min_vad_coverage_ratio
+            effective_duration_ms * config.min_vad_coverage_ratio
         )
 
         if overlap_ms < coverage_threshold_ms:
@@ -331,12 +352,19 @@ def remove_silent_entries(
             logger.debug(
                 "무음 엔트리 제거 (index=%s, duration=%.0fms, overlap=%.0fms)",
                 entry.index,
-                entry.duration_ms,
+                effective_duration_ms,
                 overlap_ms
             )
             continue
 
-        filtered.append(entry)
+        filtered.append(
+            SubtitleEntry(
+                index=entry.index,
+                start_ms=entry.start_ms,
+                end_ms=adjusted_end,
+                text=entry.text,
+            )
+        )
 
     return filtered, removed
 
