@@ -33,8 +33,9 @@ ENV PATH="/opt/venv/bin:${PATH}"
 WORKDIR /app
 
 # 의존성 변경 여부에 따라 캐시 활용 가능
-COPY requirements.txt .
 RUN pip install --upgrade pip \
+    && pip install --index-url https://download.pytorch.org/whl/cu124 \
+       torch==2.6.0 \
     && pip install -r requirements.txt \
     && pip install gunicorn
 
