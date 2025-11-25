@@ -221,7 +221,7 @@ def split_video_by_minutes(
     minutes_per_segment: float = 1.0,
     storage_key: str = DEFAULT_STORAGE_KEY,
     prefix: str = "segment",
-    vad_threshold: float = 0.5,
+    vad_threshold: float = 0.7,
 ) -> List[SegmentMetadata]:
     """Silero VAD 결과를 기반으로 분 단위 내에서 비디오를 분할합니다."""
 
@@ -311,7 +311,7 @@ def main() -> None:
     parser.add_argument(
         "--vad-threshold",
         type=float,
-        default=0.5,
+        default=0.7,
         help="Silero VAD 임계값 (0.35~0.7 권장)",
     )
     args = parser.parse_args()

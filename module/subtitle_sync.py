@@ -42,10 +42,16 @@ class SyncConfig:
     threshold_score: float = 0.3
 
     # VAD 설정
-    vad_threshold: float = 0.55
+    vad_threshold: float = 0.7
     vad_min_speech_duration_ms: int = 200
     vad_min_silence_duration_ms: int = 250
     vad_speech_pad_ms: int = 80
+
+    # 무음 구간 엔트리 제거
+    remove_silent_entries: bool = True
+    min_vad_coverage_ratio: float = 0.1
+    min_vad_coverage_ms: int = 120
+    min_silence_entry_duration_ms: int = 1200
 
     # 내부 엔트리 처리 모드
     entry_mode: str = "edge-only"  # "edge-only" or "proportional"
@@ -261,6 +267,150 @@ def filter_short_segments(
             filtered.append(seg)
 
     return filtered
+
+
+def _compute_overlap_ms(
+    entry: SubtitleEntry,
+    segments_ms: List[Tuple[float, float]]
+) -> float:
+    """자막 엔트리와 VAD 세그먼트들의 겹치는 길이 계산 (밀리초)"""
+    overlap_ms = 0.0
+    for seg_start_ms, seg_end_ms in segments_ms:
+        start = max(entry.start_ms, seg_start_ms)
+        end = min(entry.end_ms, seg_end_ms)
+        if end > start:
+            overlap_ms += end - start
+    return overlap_ms
+
+
+def remove_silent_entries(
+    entries: List[SubtitleEntry],
+    segments: List[Dict],
+    config: SyncConfig
+) -> Tuple[List[SubtitleEntry], int]:
+    """무음 구간에 위치한 환각 엔트리를 제거
+
+    Args:
+        entries: 자막 엔트리 리스트
+        segments: VAD 세그먼트 리스트 (초 단위)
+        config: 싱크 설정
+
+    Returns:
+        (필터링된 엔트리 리스트, 제거된 개수)
+    """
+    if not config.remove_silent_entries or not segments or not entries:
+        return entries, 0
+
+    segments_ms: List[Tuple[float, float]] = []
+    for seg in segments:
+        start = float(seg.get("start", 0.0)) * 1000
+        end = float(seg.get("end", 0.0)) * 1000
+        if end > start:
+            segments_ms.append((start, end))
+
+    if not segments_ms:
+        return entries, 0
+
+    filtered: List[SubtitleEntry] = []
+    removed = 0
+
+    for entry in entries:
+        # 짧은 엔트리는 그대로 유지해 VAD 누락에 의한 삭제를 방지
+        if entry.duration_ms < config.min_silence_entry_duration_ms:
+            filtered.append(entry)
+            continue
+
+        overlap_ms = _compute_overlap_ms(entry, segments_ms)
+        coverage_threshold_ms = max(
+            config.min_vad_coverage_ms,
+            entry.duration_ms * config.min_vad_coverage_ratio
+        )
+
+        if overlap_ms < coverage_threshold_ms:
+            removed += 1
+            logger.debug(
+                "무음 엔트리 제거 (index=%s, duration=%.0fms, overlap=%.0fms)",
+                entry.index,
+                entry.duration_ms,
+                overlap_ms
+            )
+            continue
+
+        filtered.append(entry)
+
+    return filtered, removed
+
+
+def cleanup_subtitles(
+    subtitles: List[Dict],
+    audio_path: str,
+    config: Optional[SyncConfig] = None,
+    precomputed_segments: Optional[List[Dict[str, float]]] = None,
+) -> Tuple[List[Dict], Dict]:
+    """VAD 기반 무음 환각 엔트리 제거만 수행
+
+    Args:
+        subtitles: srt_module에서 파싱된 자막 리스트
+        audio_path: 오디오 파일 경로
+        config: 설정
+        precomputed_segments: 미리 계산된 VAD 세그먼트
+
+    Returns:
+        (정리된 자막 리스트, 통계 정보)
+    """
+    cfg = config or SyncConfig()
+    if not cfg.remove_silent_entries:
+        return subtitles, {"status": "skip", "silent_entries_removed": 0}
+
+    entries = parse_srt_entries(subtitles)
+    if not entries:
+        return subtitles, {'status': 'no_entries', 'silent_entries_removed': 0}
+
+    segment_source = "vad"
+    if precomputed_segments:
+        segments = [
+            {
+                "start": float(seg.get("start", 0.0)),
+                "end": float(seg.get("end", 0.0)),
+            }
+            for seg in precomputed_segments
+            if float(seg.get("end", 0.0)) > float(seg.get("start", 0.0))
+        ]
+        segment_source = "precomputed"
+    else:
+        vad = SileroVAD(
+            threshold=cfg.vad_threshold,
+            min_speech_duration_ms=cfg.vad_min_speech_duration_ms,
+            min_silence_duration_ms=cfg.vad_min_silence_duration_ms,
+            speech_pad_ms=cfg.vad_speech_pad_ms,
+        )
+        segments = vad.detect_speech_from_file(audio_path)
+
+    segments = merge_close_segments(segments, merge_threshold_ms=150)
+    segments = filter_short_segments(segments, cfg.vad_min_speech_duration_ms)
+
+    if not segments:
+        return subtitles, {"status": "no_segments", "silent_entries_removed": 0}
+
+    cleaned_entries, removed = remove_silent_entries(entries, segments, cfg)
+    result = []
+    for entry in cleaned_entries:
+        result.append(
+            {
+                "index": entry.index,
+                "start": ms_to_time(entry.start_ms),
+                "end": ms_to_time(entry.end_ms),
+                "text": entry.text,
+            }
+        )
+
+    stats = {
+        "status": "success",
+        "vad_segments": len(segments),
+        "silent_entries_removed": removed,
+        "segment_source": segment_source,
+    }
+    return result, stats
 
 
 def find_best_boundary(
@@ -660,10 +810,15 @@ def sync_subtitles(
         logger.warning("VAD 세그먼트가 없습니다.")
         return subtitles, {'status': 'no_segments'}
 
-    # 3. 청크 구성
+    # 3. 무음 환각 엔트리 제거
+    entries, removed_silent = remove_silent_entries(entries, segments, config)
+    if removed_silent:
+        logger.info("무음 구간 엔트리 %d개 제거됨", removed_silent)
+
+    # 4. 청크 구성
     chunks = build_chunks(entries, config.chunk_mode, config.gap_threshold_ms)
 
-    # 4. 각 청크의 경계 보정
+    # 5. 각 청크의 경계 보정
     corrected_entries = []
     corrections_applied = 0
 
@@ -692,11 +847,11 @@ def sync_subtitles(
         chunk_corrected = apply_chunk_correction(chunk, new_start, new_end, config)
         corrected_entries.extend(chunk_corrected)
 
-    # 5. 겹침 보정
+    # 6. 겹침 보정
     logger.info("엔트리 간 겹침 검사 및 보정 중...")
     corrected_entries, overlaps_fixed = fix_entry_overlaps(corrected_entries, config)
 
-    # 6. 결과 생성
+    # 7. 결과 생성
     result = []
     for entry in corrected_entries:
         result.append({
@@ -714,11 +869,13 @@ def sync_subtitles(
         'corrections_applied': corrections_applied,
         'overlaps_fixed': overlaps_fixed,
         'segment_source': segment_source,
+        'silent_entries_removed': removed_silent,
     }
 
     logger.info(
         f"보정 완료: {len(entries)}개 엔트리, {len(chunks)}개 청크, "
-        f"{corrections_applied}개 청크 보정됨, {overlaps_fixed}개 겹침 수정됨"
+        f"{corrections_applied}개 청크 보정됨, {overlaps_fixed}개 겹침 수정됨, "
+        f"무음 엔트리 제거 {removed_silent}개"
     )
 
     return result, stats

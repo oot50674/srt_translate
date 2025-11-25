@@ -54,7 +54,7 @@ class SileroVAD:
     def __init__(
         self,
         sampling_rate: int = 16000,
-        threshold: float = 0.5,
+        threshold: float = 0.7,
         min_speech_duration_ms: int = 100,
         min_silence_duration_ms: int = 250,
         speech_pad_ms: int = 30,

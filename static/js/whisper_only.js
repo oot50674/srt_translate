@@ -10,9 +10,13 @@
     const submitSpinner = document.getElementById('whisper-submit-spinner');
     const submitText = document.getElementById('whisper-submit-text');
     const chunkSecondsInput = document.getElementById('whisper-chunk-seconds');
+    const vadCleanupToggle = document.getElementById('whisper-vad-cleanup-toggle');
+    const vadSyncToggle = document.getElementById('whisper-vad-sync-toggle');
     const selectedFiles = [];
     const youtubeUrls = [];
     const STORAGE_KEY = 'whisper_chunk_seconds';
+    const VAD_CLEANUP_STORAGE_KEY = 'whisper_apply_vad_cleanup';
+    const VAD_SYNC_STORAGE_KEY = 'whisper_apply_vad_sync';
 
     function showAlert(message, type = 'error') {
         if (!message) return;
@@ -89,6 +93,52 @@
             }
         } catch (err) {
             console.warn('청크 길이 저장에 실패했습니다.', err);
+        }
+    }
+
+    function loadVadCleanupPreference() {
+        if (!vadCleanupToggle) return;
+        try {
+            const stored = localStorage.getItem(VAD_CLEANUP_STORAGE_KEY);
+            if (stored === '0') {
+                vadCleanupToggle.checked = false;
+            } else if (stored === '1') {
+                vadCleanupToggle.checked = true;
+            }
+        } catch (err) {
+            console.warn('환각 제거 설정을 불러오지 못했습니다.', err);
+        }
+    }
+
+    function persistVadCleanupPreference(value) {
+        if (!vadCleanupToggle) return;
+        try {
+            localStorage.setItem(VAD_CLEANUP_STORAGE_KEY, value ? '1' : '0');
+        } catch (err) {
+            console.warn('환각 제거 설정을 저장하지 못했습니다.', err);
+        }
+    }
+
+    function loadVadSyncPreference() {
+        if (!vadSyncToggle) return;
+        try {
+            const stored = localStorage.getItem(VAD_SYNC_STORAGE_KEY);
+            if (stored === '0') {
+                vadSyncToggle.checked = false;
+            } else if (stored === '1') {
+                vadSyncToggle.checked = true;
+            }
+        } catch (err) {
+            console.warn('VAD 싱크 설정을 불러오지 못했습니다.', err);
+        }
+    }
+
+    function persistVadSyncPreference(value) {
+        if (!vadSyncToggle) return;
+        try {
+            localStorage.setItem(VAD_SYNC_STORAGE_KEY, value ? '1' : '0');
+        } catch (err) {
+            console.warn('VAD 싱크 설정을 저장하지 못했습니다.', err);
         }
     }
 
@@ -250,6 +300,16 @@
             formData.append('youtube_urls', url);
         });
         formData.append('chunk_seconds', String(chunkSecondsValue));
+        const applyVadCleanup = vadCleanupToggle ? vadCleanupToggle.checked : true;
+        const applyVadSync = vadSyncToggle ? vadSyncToggle.checked : true;
+        formData.append('apply_vad_cleanup', applyVadCleanup ? '1' : '0');
+        formData.append('apply_vad_sync', applyVadSync ? '1' : '0');
+        if (vadCleanupToggle) {
+            persistVadCleanupPreference(applyVadCleanup);
+        }
+        if (vadSyncToggle) {
+            persistVadSyncPreference(applyVadSync);
+        }
 
         setSubmitting(true);
         showAlert('');
@@ -279,5 +339,13 @@
     bindSelectBtn();
     bindYoutubeControls();
     loadStoredChunkSeconds();
+    loadVadCleanupPreference();
+    loadVadSyncPreference();
+    vadCleanupToggle?.addEventListener('change', () => {
+        persistVadCleanupPreference(vadCleanupToggle.checked);
+    });
+    vadSyncToggle?.addEventListener('change', () => {
+        persistVadSyncPreference(vadSyncToggle.checked);
+    });
     form.addEventListener('submit', handleSubmit);
 })();

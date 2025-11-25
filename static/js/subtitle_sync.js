@@ -91,7 +91,7 @@ $(document).ready(function () {
     function collectConfig() {
         return {
             chunk_mode: $('input[name="chunk_mode"]:checked').val() || 'grouped',
-            vad_threshold: parseFloat($vadThreshold.val()) || 0.55,
+            vad_threshold: parseFloat($vadThreshold.val()) || 0.7,
             vad_min_speech_duration_ms: parseInt($minSpeechDuration.val()) || 200,
             vad_min_silence_duration_ms: parseInt($minSilenceDuration.val()) || 250,
             vad_speech_pad_ms: parseInt($speechPad.val()) || 80,

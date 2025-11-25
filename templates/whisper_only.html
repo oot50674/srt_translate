@@ -80,6 +80,28 @@
                                 </div>
                             </div>
 
+                            <div id="whisper-vad-cleanup-block" class="space-y-3">
+                                <label for="whisper-vad-cleanup-toggle" class="text-sm font-medium text-slate-700">무음 환각 자막 제거</label>
+                                <div id="whisper-vad-cleanup-inner" class="flex items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+                                    <input type="checkbox" id="whisper-vad-cleanup-toggle" name="apply_vad_cleanup" class="h-5 w-5 mt-0.5 rounded border-slate-300 text-[#0c77f2] focus:ring-[#0c77f2]" checked>
+                                    <div id="whisper-vad-cleanup-copy" class="flex flex-col gap-1">
+                                        <p class="text-sm font-semibold text-slate-800">무음 구간에 끼어든 환각 자막을 지웁니다.</p>
+                                        <p class="text-xs text-slate-500">Silero VAD로 발화가 없는 영역을 찾아 불필요한 “감사합니다” 같은 문장을 제거합니다.</p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div id="whisper-vad-sync-block" class="space-y-3">
+                                <label for="whisper-vad-sync-toggle" class="text-sm font-medium text-slate-700">VAD 싱크 보정</label>
+                                <div id="whisper-vad-sync-inner" class="flex items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+                                    <input type="checkbox" id="whisper-vad-sync-toggle" name="apply_vad_sync" class="h-5 w-5 mt-0.5 rounded border-slate-300 text-[#0c77f2] focus:ring-[#0c77f2]" checked>
+                                    <div id="whisper-vad-sync-copy" class="flex flex-col gap-1">
+                                        <p class="text-sm font-semibold text-slate-800">겹치는 자막을 줄이고 타임라인을 조정합니다.</p>
+                                        <p class="text-xs text-slate-500">VAD 세그먼트에 맞춰 시작/끝 시간을 스냅해 겹침과 빈 구간을 보정합니다.</p>
+                                    </div>
+                                </div>
+                            </div>
+
                             <div class="flex items-center justify-end flex-wrap gap-3">
                                 <button id="whisper-submit-btn" type="submit" class="flex min-w-[160px] items-center justify-center gap-2 rounded-md bg-[#0c77f2] px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-600 disabled:opacity-60 disabled:cursor-not-allowed">
                                     <span id="whisper-submit-spinner" class="material-icons text-base hidden">autorenew</span>

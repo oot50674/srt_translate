@@ -250,7 +250,7 @@ project/
 ### 주요 파라미터
 
 **VAD 설정**
-- `threshold` (0.0-1.0): 음성 감지 민감도 (기본: 0.55)
+- `threshold` (0.0-1.0): 음성 감지 민감도 (기본: 0.7)
 - `min_speech_duration_ms`: 최소 음성 길이 (기본: 200ms)
 - `min_silence_duration_ms`: 최소 무음 길이 (기본: 250ms)
 - `speech_pad_ms`: 음성 앞뒤 여유 시간 (기본: 80ms)
