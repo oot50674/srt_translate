@@ -26,6 +26,7 @@ from module.subtitle_sync import (
     sync_subtitles,
     export_srt,
 )
+from module.hallucination_filter import fix_repetitive_hallucinations
 
 
 WHISPER_BATCH_ROOT = os.path.join(BASE_DIR, "whisper_batches")
@@ -363,6 +364,22 @@ def _transcribe_segments(
     if not entries:
         entries.append({"start": 0.0, "end": 0.5, "text": "[NO SPEECH DETECTED]"})
     entries.sort(key=lambda entry: entry["start"])
+    try:
+        entries, hallucination_stats = fix_repetitive_hallucinations(
+            entries,
+            item.source_path,
+            whisper=whisper,
+        )
+        flagged = hallucination_stats.get("flagged", 0)
+        retranscribed = hallucination_stats.get("retranscribed", 0)
+        if flagged or retranscribed:
+            _update_item(
+                batch,
+                item,
+                message=f"환각 의심 자막 {retranscribed}건 재전사, {flagged}건 표시 처리 중...",
+            )
+    except Exception as exc:
+        _update_item(batch, item, message=f"환각 반복 검사 건너뜀: {exc}")
     transcript_dir = _ensure_dir(item.output_dir)
     base_name = os.path.splitext(item.file_name)[0] or item.item_id
     target_name = _sanitize_filename(f"{base_name}.srt", f"{item.item_id}.srt")
