@@ -12,3 +12,4 @@
 /.claude
 AGENTS.md
 *.pyc
+/models

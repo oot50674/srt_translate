@@ -31,6 +31,7 @@ _BATCHES: Dict[str, "WhisperBatch"] = {}
 _LOCK = threading.RLock()
 _WHISPER_LOCK = threading.Lock()
 _WHISPER_INSTANCE: Optional[WhisperUtil] = None
+_CURRENT_WHISPER_MODEL: Optional[str] = None
 _ACTIVE_BATCHES = 0
 _SUBSCRIBER_LOCK = threading.RLock()
 _BATCH_SUBSCRIBERS: Dict[str, List[Queue]] = {}
@@ -85,11 +86,22 @@ def _broadcast_batch_state(batch: "WhisperBatch") -> None:
     _publish_batch_state(batch.batch_id, payload)
 
 
-def _get_whisper() -> WhisperUtil:
-    global _WHISPER_INSTANCE
+def _get_whisper(model_name: Optional[str] = None) -> WhisperUtil:
+    global _WHISPER_INSTANCE, _CURRENT_WHISPER_MODEL
+    requested = _normalize_model_name(model_name)
     with _WHISPER_LOCK:
         if _WHISPER_INSTANCE is None:
-            _WHISPER_INSTANCE = WhisperUtil()
+            _WHISPER_INSTANCE = WhisperUtil(model_name=requested)
+            _CURRENT_WHISPER_MODEL = requested
+            return _WHISPER_INSTANCE
+        current = (_CURRENT_WHISPER_MODEL or "")
+        if current.lower() != requested.lower():
+            try:
+                _WHISPER_INSTANCE.unload_model()
+            except Exception:
+                pass
+            _WHISPER_INSTANCE = WhisperUtil(model_name=requested)
+            _CURRENT_WHISPER_MODEL = requested
         return _WHISPER_INSTANCE
 
 
@@ -100,7 +112,7 @@ def _increment_active_batches() -> None:
 
 
 def _unload_whisper() -> None:
-    global _WHISPER_INSTANCE
+    global _WHISPER_INSTANCE, _CURRENT_WHISPER_MODEL
     with _WHISPER_LOCK:
         if _WHISPER_INSTANCE is None:
             return
@@ -109,6 +121,7 @@ def _unload_whisper() -> None:
         except Exception:
             pass
         _WHISPER_INSTANCE = None
+        _CURRENT_WHISPER_MODEL = None
 
 
 def _decrement_active_batches() -> None:
@@ -127,6 +140,12 @@ def _ensure_dir(path: str) -> str:
 
 _INVALID_CHARS = set('<>:"/\\|?*\0')
 _YOUTUBE_HOST_SUFFIXES = ("youtube.com", "youtu.be")
+
+
+def _normalize_model_name(value: Optional[str]) -> str:
+    cleaned = (value or "").strip()
+    normalized = cleaned.lower()
+    return normalized or "large-v3"
 
 
 def _sanitize_filename(original: str, fallback: str) -> str:
@@ -286,6 +305,7 @@ class WhisperBatch:
     batch_id: str
     chunk_seconds: float
     base_dir: str
+    model_name: str = "large-v3"
     apply_hallucination_cleanup: bool = True
     items: List[WhisperBatchItem] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
@@ -306,6 +326,7 @@ class WhisperBatch:
         return {
             "batch_id": self.batch_id,
             "chunk_seconds": self.chunk_seconds,
+            "model_name": self.model_name,
             "apply_hallucination_cleanup": self.apply_hallucination_cleanup,
             "status": self.status,
             "items": entries,
@@ -445,17 +466,27 @@ def _transcribe_segments(
     segments: List[SegmentMetadata],
     *,
     apply_hallucination_cleanup: bool,
+    model_name: str,
 ) -> str:
-    whisper = _get_whisper()
+    whisper = _get_whisper(model_name)
     entries: List[Dict[str, Any]] = []
     total = len(segments) or 1
 
-    def _build_segment_progress_callback(segment_idx: int, duration_seconds: float):
+
+    def _build_segment_progress_callback(
+        segment_idx: int,
+        duration_seconds: float,
+        segment_start_time: float,
+    ):
         safe_duration = max(duration_seconds, 0.001)
+        start_offset = max(0.0, segment_start_time)
 
         def _callback(snippet: Dict[str, Any]) -> None:
             snippet_end = float(snippet.get("end", 0.0) or 0.0)
-            ratio = max(0.0, min(1.0, snippet_end / safe_duration))
+            relative_end = snippet_end
+            if start_offset > 0 and snippet_end > safe_duration:
+                relative_end = max(0.0, snippet_end - start_offset)
+            ratio = max(0.0, min(1.0, relative_end / safe_duration))
             preview = str(snippet.get("text", "")).strip() or "전사 중"
             if len(preview) > 80:
                 preview = preview[:77] + "..."
@@ -491,7 +522,11 @@ def _transcribe_segments(
         if segment_duration <= 0.0:
             segment_duration = 0.001
         try:
-            progress_callback = _build_segment_progress_callback(idx - 1, segment_duration)
+            progress_callback = _build_segment_progress_callback(
+                idx - 1,
+                segment_duration,
+                float(getattr(segment, "start_time", 0.0) or 0.0),
+            )
             result = whisper.transcribe_audio(
                 segment.file_path,
                 show_progress=False,
@@ -610,6 +645,7 @@ def _process_item(batch: WhisperBatch, item: WhisperBatchItem) -> None:
             item,
             segments,
             apply_hallucination_cleanup=apply_hallucination_cleanup,
+            model_name=batch.model_name,
         )
         item.transcript_path = transcript_path
         item.download_ready = bool(transcript_path and os.path.isfile(transcript_path))
@@ -644,6 +680,7 @@ def create_batch(
     chunk_seconds: float = 30.0,
     youtube_urls: Iterable[str] = (),
     apply_hallucination_cleanup: bool = True,
+    model_name: Optional[str] = None,
 ) -> Dict[str, Any]:
     uploads = _filter_uploads(files)
     raw_youtube_urls = list(youtube_urls or [])
@@ -654,6 +691,13 @@ def create_batch(
         raise ValueError("업로드할 영상 또는 오디오 파일을 선택해 주세요.")
     if chunk_seconds < 0:
         raise ValueError("청크 길이는 음수일 수 없습니다.")
+    normalized_model = _normalize_model_name(model_name)
+    with _LOCK:
+        global _CURRENT_WHISPER_MODEL
+        if _CURRENT_WHISPER_MODEL and _CURRENT_WHISPER_MODEL.lower() != normalized_model.lower():
+            raise ValueError("다른 Whisper 모델 작업이 진행 중입니다. 기존 작업이 끝나면 다시 시도해 주세요.")
+        if _CURRENT_WHISPER_MODEL is None:
+            _CURRENT_WHISPER_MODEL = normalized_model
 
     batch_id = uuid.uuid4().hex
     batch_dir = _ensure_dir(os.path.join(WHISPER_BATCH_ROOT, batch_id))
@@ -703,6 +747,7 @@ def create_batch(
         batch_id=batch_id,
         chunk_seconds=chunk_seconds,
         base_dir=batch_dir,
+        model_name=normalized_model,
         apply_hallucination_cleanup=apply_hallucination_cleanup,
         items=items,
     )

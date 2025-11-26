@@ -54,6 +54,10 @@ class WhisperEngine:
         if model_name: self.model_params["model_size_or_path"] = model_name
         if device: self.model_params["device"] = device
         
+        # download_root가 None으로 전달되면 기본값을 덮어쓰지 않도록 제거
+        if "download_root" in kwargs and kwargs["download_root"] is None:
+            del kwargs["download_root"]
+
         # 나머지 kwargs 업데이트
         self.model_params.update(kwargs)
 

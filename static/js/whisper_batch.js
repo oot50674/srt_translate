@@ -14,6 +14,7 @@
 
     const alertBox = document.getElementById('batch-alert');
     const statusText = document.getElementById('whisper-batch-status-text');
+    const modelNameEl = document.getElementById('whisper-model-name');
     const progressBar = document.getElementById('whisper-batch-progress-bar');
     const progressText = document.getElementById('whisper-batch-progress-text');
     const totalCountEl = document.getElementById('whisper-total-count');
@@ -21,7 +22,6 @@
     const failedCountEl = document.getElementById('whisper-failed-count');
     const filesList = document.getElementById('whisper-files-list');
     const filesPlaceholder = document.getElementById('whisper-files-placeholder');
-    const updatedAtEl = document.getElementById('whisper-updated-at');
 
     const STATUS_BADGE = {
         pending: 'bg-slate-100 text-slate-600',
@@ -86,7 +86,7 @@
         if (totalCountEl) totalCountEl.textContent = data.total_items ?? 0;
         if (completeCountEl) completeCountEl.textContent = data.completed_items ?? 0;
         if (failedCountEl) failedCountEl.textContent = data.failed_items ?? 0;
-        if (updatedAtEl) updatedAtEl.textContent = `업데이트: ${formatTime(data.updated_at)}`;
+        if (modelNameEl) modelNameEl.textContent = data.model_name || 'large-v3';
     }
 
     function buildSegmentRows(item) {
@@ -153,7 +153,6 @@
                 </div>
                 ${segmentsMarkup}
                 <div class="flex items-center justify-between">
-                    <span class="text-xs text-slate-400">업데이트: ${formatTime(item.updated_at)}</span>
                     ${downloadBtn}
                 </div>
             </div>

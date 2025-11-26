@@ -9,14 +9,16 @@
     const submitBtn = document.getElementById('whisper-submit-btn');
     const submitSpinner = document.getElementById('whisper-submit-spinner');
     const submitText = document.getElementById('whisper-submit-text');
-    const chunkSecondsInput = document.getElementById('whisper-chunk-seconds');
+    const chunkMinutesInput = document.getElementById('whisper-chunk-minutes');
     const disableChunkingCheckbox = document.getElementById('whisper-disable-chunking');
     const hallucinationToggle = document.getElementById('whisper-hallucination-toggle');
+    const modelInput = document.getElementById('whisper-model-name');
     const selectedFiles = [];
     const youtubeUrls = [];
-    const STORAGE_KEY = 'whisper_chunk_seconds';
+    const STORAGE_KEY = 'whisper_chunk_minutes';
     const DISABLE_STORAGE_KEY = 'whisper_disable_chunking';
     const HALLUCINATION_STORAGE_KEY = 'whisper_apply_hallucination_cleanup';
+    const MODEL_STORAGE_KEY = 'whisper_model_name';
 
     function showAlert(message, type = 'error') {
         if (!message) return;
@@ -25,6 +27,31 @@
             Toast.info(message, { position: 'top-center' });
         } else {
             Toast.alert(message, { position: 'top-center', ariaLive: 'assertive' });
+        }
+    }
+
+    function loadStoredModelName() {
+        if (!modelInput) return;
+        try {
+            const stored = localStorage.getItem(MODEL_STORAGE_KEY);
+            if (stored) {
+                modelInput.value = stored;
+            }
+        } catch (err) {
+            console.warn('Whisper 모델 정보를 불러오지 못했습니다.', err);
+        }
+    }
+
+    function persistModelName(value) {
+        if (!modelInput) return;
+        try {
+            if (value) {
+                localStorage.setItem(MODEL_STORAGE_KEY, value);
+            } else {
+                localStorage.removeItem(MODEL_STORAGE_KEY);
+            }
+        } catch (err) {
+            console.warn('Whisper 모델 정보를 저장하지 못했습니다.', err);
         }
     }
 
@@ -71,12 +98,28 @@
         });
     }
 
-    function loadStoredChunkSeconds() {
-        if (!chunkSecondsInput) return;
+    function loadStoredChunkMinutes() {
+        if (!chunkMinutesInput) return;
         try {
             const storedValue = localStorage.getItem(STORAGE_KEY);
             if (storedValue) {
-                chunkSecondsInput.value = storedValue;
+                chunkMinutesInput.value = storedValue;
+            }
+            else {
+                // Backwards compatibility: if older key 'whisper_chunk_seconds' exists,
+                // convert to minutes and populate the input.
+                try {
+                    const legacy = localStorage.getItem('whisper_chunk_seconds');
+                    if (legacy) {
+                        const secs = parseFloat(legacy);
+                        if (!Number.isNaN(secs) && Number.isFinite(secs) && secs > 0) {
+                            const mins = Math.max(1, Math.round(secs / 60));
+                            chunkMinutesInput.value = String(mins);
+                        }
+                    }
+                } catch (e) {
+                    // ignore
+                }
             }
         } catch (err) {
             console.warn('로컬스토리지에서 청크 길이를 불러오지 못했습니다.', err);
@@ -84,23 +127,23 @@
     }
 
     function loadStoredDisableChunking() {
-        if (!disableChunkingCheckbox || !chunkSecondsInput) return;
+        if (!disableChunkingCheckbox || !chunkMinutesInput) return;
         try {
             const stored = localStorage.getItem(DISABLE_STORAGE_KEY);
             if (stored === '1') {
                 disableChunkingCheckbox.checked = true;
-                chunkSecondsInput.disabled = true;
+                chunkMinutesInput.disabled = true;
             } else {
                 disableChunkingCheckbox.checked = false;
-                chunkSecondsInput.disabled = false;
+                chunkMinutesInput.disabled = false;
             }
         } catch (err) {
             console.warn('청크 비활성화 설정 불러오기 실패', err);
         }
     }
 
-    function persistChunkSeconds(value) {
-        if (!chunkSecondsInput) return;
+    function persistChunkMinutes(value) {
+        if (!chunkMinutesInput) return;
         try {
             if (Number.isFinite(value) && value > 0) {
                 localStorage.setItem(STORAGE_KEY, String(value));
@@ -234,16 +277,16 @@
                 handleNewFiles(fileInput.files);
             }
         });
-        chunkSecondsInput?.addEventListener('input', () => {
-            const val = parseFloat(chunkSecondsInput.value);
+        chunkMinutesInput?.addEventListener('input', () => {
+            const val = parseFloat(chunkMinutesInput.value);
             if (Number.isFinite(val)) {
-                persistChunkSeconds(val);
+                persistChunkMinutes(val);
             }
         });
         disableChunkingCheckbox?.addEventListener('change', () => {
-            if (!chunkSecondsInput) return;
+            if (!chunkMinutesInput) return;
             const disabled = disableChunkingCheckbox.checked;
-            chunkSecondsInput.disabled = disabled;
+            chunkMinutesInput.disabled = disabled;
             // if disabling chunking we don't need to persist chunk value
             persistDisableChunking(disabled);
         });
@@ -298,19 +341,20 @@
             showAlert('파일을 추가하거나 YouTube 링크를 입력해 주세요.');
             return;
         }
-        let chunkSecondsValue = parseFloat(chunkSecondsInput?.value || '30');
+        let chunkMinutesValue = parseFloat(chunkMinutesInput?.value || '4');
+        let chunkSecondsValue = Number.isFinite(chunkMinutesValue) ? chunkMinutesValue * 60 : NaN;
         const disableChunking = disableChunkingCheckbox?.checked === true;
         if (disableChunking) {
             // When disable chunking, set chunkSeconds to 0 so the server will pass through the source file without splitting
             chunkSecondsValue = 0;
         } else {
-            if (!Number.isFinite(chunkSecondsValue) || chunkSecondsValue <= 0) {
-                showAlert('청크 길이는 초 단위 양수로 입력해 주세요.');
-                chunkSecondsInput?.focus();
+            if (!Number.isFinite(chunkMinutesValue) || chunkMinutesValue <= 0) {
+                showAlert('청크 길이는 분 단위 양수로 입력해 주세요.');
+                chunkMinutesInput?.focus();
                 return;
             }
         }
-        persistChunkSeconds(chunkSecondsValue);
+        persistChunkMinutes(chunkMinutesValue);
         const formData = new FormData();
         selectedFiles.forEach(file => {
             formData.append('media_files', file);
@@ -327,6 +371,13 @@
         if (hallucinationToggle) {
             persistHallucinationPreference(applyHallucinationCleanup);
         }
+        const modelName = (modelInput?.value || '').trim();
+        if (modelName) {
+            formData.append('model_name', modelName);
+            persistModelName(modelName);
+        } else {
+            persistModelName('');
+        }
 
         setSubmitting(true);
         showAlert('');
@@ -339,7 +390,7 @@
             if (!response.ok) {
                 throw new Error(payload.error || '배치 작업을 시작하지 못했습니다.');
             }
-            showAlert('작업을 준비했습니다. 곧 진행 화면으로 이동합니다.', 'success');
+            
             const batchId = payload.batch_id;
             if (batchId) {
                 window.location.href = `/whisper_only/batches/${encodeURIComponent(batchId)}`;
@@ -355,11 +406,16 @@
     bindDropZone();
     bindSelectBtn();
     bindYoutubeControls();
-    loadStoredChunkSeconds();
+    loadStoredChunkMinutes();
     loadStoredDisableChunking();
     loadHallucinationPreference();
+    loadStoredModelName();
     hallucinationToggle?.addEventListener('change', () => {
         persistHallucinationPreference(hallucinationToggle.checked);
+    });
+    modelInput?.addEventListener('change', () => {
+        const value = (modelInput.value || '').trim();
+        persistModelName(value);
     });
     form.addEventListener('submit', handleSubmit);
 })();

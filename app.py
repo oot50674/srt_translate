@@ -355,6 +355,7 @@ def api_create_whisper_batch():
     disable_chunking_raw = (request.form.get('disable_chunking') or '0').strip().lower()
     hallucination_cleanup_raw = (request.form.get('apply_hallucination_cleanup') or '1').strip().lower()
     apply_hallucination_cleanup = hallucination_cleanup_raw not in {'0', 'false', 'off'}
+    model_name = (request.form.get('model_name') or '').strip()
     try:
         chunk_seconds = float(chunk_seconds_raw)
     except (TypeError, ValueError):
@@ -367,6 +368,7 @@ def api_create_whisper_batch():
             chunk_seconds=chunk_seconds,
             youtube_urls=youtube_urls,
             apply_hallucination_cleanup=apply_hallucination_cleanup,
+            model_name=model_name or None,
         )
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400
