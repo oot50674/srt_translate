@@ -346,12 +346,15 @@ def api_create_whisper_batch():
     if single_url:
         youtube_urls.append(single_url)
     chunk_seconds_raw = request.form.get('chunk_seconds') or 30
+    disable_chunking_raw = (request.form.get('disable_chunking') or '0').strip().lower()
     hallucination_cleanup_raw = (request.form.get('apply_hallucination_cleanup') or '1').strip().lower()
     apply_hallucination_cleanup = hallucination_cleanup_raw not in {'0', 'false', 'off'}
     try:
         chunk_seconds = float(chunk_seconds_raw)
     except (TypeError, ValueError):
         chunk_seconds = 30.0
+    if disable_chunking_raw in {'1', 'true', 'on'}:
+        chunk_seconds = 0.0
     try:
         batch = create_whisper_batch(
             files=files,

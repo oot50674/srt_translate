@@ -95,8 +95,8 @@ class WhisperUtil:
         self.download_root = download_root
         self.model_kwargs = model_kwargs
         self.no_speech_threshold = 0.8
-        self.temperature = 0.6
-        self.compression_ratio_threshold = 0.6
+        self.temperature = 0.4
+        self.compression_ratio_threshold = 2.2
         self.engine: Optional[WhisperEngine] = None  # 타입 힌트 유지
         self.process_runner: Optional[WhisperProcessRunner] = None
         self._init_process_runner()

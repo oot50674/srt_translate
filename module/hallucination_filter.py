@@ -6,7 +6,8 @@ import subprocess
 import tempfile
 from typing import Any, Dict, List, Optional, Tuple
 
-from module import segment_analyzer
+# segment_analyzer removed; use only _is_suspicious_length for candidate
+# selection/verification
 from module.ffmpeg_module import register_ffmpeg_path
 from module.Whisper_util import WhisperUtil, get_whisper_util
 
@@ -17,14 +18,7 @@ MIN_TEXT_LENGTH = 0
 CHARS_PER_SECOND_THRESHOLD = 12.0
 
 
-def _guess_language(text: str) -> str:
-    """간단한 문자 포함 여부로 언어를 추정합니다."""
-    for ch in text:
-        if "가" <= ch <= "힣":
-            return "ko"
-        if "\u3040" <= ch <= "\u30ff" or "\u4e00" <= ch <= "\u9faf":
-            return "ja"
-    return "en"
+# language detection removed; we only need length vs duration checks now
 
 
 def _is_suspicious_length(
@@ -115,7 +109,7 @@ def fix_repetitive_hallucinations(
     min_text_length: int = MIN_TEXT_LENGTH,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
     """
-    길이에 비해 과도하게 긴 자막을 completeness_score 기반으로 재전사/표시합니다.
+    길이에 비해 과도하게 긴 자막을 길이/재생시간(문자/초) 기준으로 재전사/표시합니다.
 
     Returns:
         (entries, stats) 튜플. stats는 재전사/표시 건수를 포함합니다.
@@ -144,10 +138,8 @@ def fix_repetitive_hallucinations(
             min_chars_per_sec=min_chars_per_second,
         ):
             continue
-        language = _guess_language(text)
-        analysis = segment_analyzer.analyze_segment(text, language=language)
-        if analysis.completeness_score > 0.1:
-            continue
+        # We use only the length/duration heuristic implemented by
+        # `_is_suspicious_length` for candidate detection and verification.
 
         stats["candidates"] += 1
         entry.setdefault("original_text", text)
@@ -155,9 +147,13 @@ def fix_repetitive_hallucinations(
         new_text = _retranscribe_clip(source_path, start, end, whisper)
         stats["retranscribed"] += 1
         if new_text:
-            new_analysis = segment_analyzer.analyze_segment(new_text, language=language)
             stripped_new = new_text.strip()
-            if len(stripped_new) <= 10 or new_analysis.completeness_score >= 0.2:
+            # If the newly transcribed text is very short, accept it.
+            # Otherwise, if it is no longer suspicious by our chars/sec rule,
+            # accept it as the new transcription. Else, mark as hallucination.
+            if len(stripped_new) <= 10 or not _is_suspicious_length(
+                stripped_new, duration, min_text_length=min_text_length, min_chars_per_sec=min_chars_per_second
+            ):
                 entry["text"] = stripped_new
                 stats["succeeded"] += 1
                 continue

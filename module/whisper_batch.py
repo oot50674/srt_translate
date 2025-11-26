@@ -20,6 +20,7 @@ from module.video_split import (
 )
 from module.Whisper_util import WhisperUtil
 from module.hallucination_filter import fix_repetitive_hallucinations
+from module.ffmpeg_module import get_duration_seconds
 
 
 WHISPER_BATCH_ROOT = os.path.join(BASE_DIR, "whisper_batches")
@@ -391,14 +392,31 @@ def _process_item(batch: WhisperBatch, item: WhisperBatchItem) -> None:
         storage_key = f"{DEFAULT_STORAGE_KEY}:whisper:{batch.batch_id}:{item.item_id}"
         _update_item(batch, item, status="running", message="세그먼트를 준비하는 중입니다...", progress=0.0)
         source_path = _ensure_source_path(batch, item)
-        minutes_per_segment = max(batch.chunk_seconds / 60.0, 1 / 60.0)
-        segments = split_video_by_minutes(
-            input_path=source_path,
-            output_dir=item.segments_dir,
-            minutes_per_segment=minutes_per_segment,
-            storage_key=storage_key,
-            prefix="segment",
-        )
+        if batch.chunk_seconds <= 0:
+            # Bypass splitting; treat the full source file as a single segment
+            try:
+                video_duration = get_duration_seconds(source_path)
+            except Exception:
+                video_duration = 0.0
+            segments = [
+                SegmentMetadata(
+                    index=1,
+                    file_path=os.path.abspath(source_path),
+                    start_time=0.0,
+                    end_time=round(float(video_duration or 0.0), 3),
+                    duration=round(float(video_duration or 0.0), 3),
+                    speech_segments=[],
+                )
+            ]
+        else:
+            minutes_per_segment = max(batch.chunk_seconds / 60.0, 1 / 60.0)
+            segments = split_video_by_minutes(
+                input_path=source_path,
+                output_dir=item.segments_dir,
+                minutes_per_segment=minutes_per_segment,
+                storage_key=storage_key,
+                prefix="segment",
+            )
         aggregated_segments: List[Dict[str, float]] = []
         for meta in segments:
             for speech in meta.speech_segments or []:
@@ -455,8 +473,8 @@ def create_batch(
         if raw_youtube_urls:
             raise ValueError("유효한 YouTube 링크를 입력해 주세요.")
         raise ValueError("업로드할 영상 또는 오디오 파일을 선택해 주세요.")
-    if chunk_seconds <= 0:
-        raise ValueError("청크 길이는 0보다 커야 합니다.")
+    if chunk_seconds < 0:
+        raise ValueError("청크 길이는 음수일 수 없습니다.")
 
     batch_id = uuid.uuid4().hex
     batch_dir = _ensure_dir(os.path.join(WHISPER_BATCH_ROOT, batch_id))

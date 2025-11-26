@@ -10,10 +10,12 @@
     const submitSpinner = document.getElementById('whisper-submit-spinner');
     const submitText = document.getElementById('whisper-submit-text');
     const chunkSecondsInput = document.getElementById('whisper-chunk-seconds');
+    const disableChunkingCheckbox = document.getElementById('whisper-disable-chunking');
     const hallucinationToggle = document.getElementById('whisper-hallucination-toggle');
     const selectedFiles = [];
     const youtubeUrls = [];
     const STORAGE_KEY = 'whisper_chunk_seconds';
+    const DISABLE_STORAGE_KEY = 'whisper_disable_chunking';
     const HALLUCINATION_STORAGE_KEY = 'whisper_apply_hallucination_cleanup';
 
     function showAlert(message, type = 'error') {
@@ -81,6 +83,22 @@
         }
     }
 
+    function loadStoredDisableChunking() {
+        if (!disableChunkingCheckbox || !chunkSecondsInput) return;
+        try {
+            const stored = localStorage.getItem(DISABLE_STORAGE_KEY);
+            if (stored === '1') {
+                disableChunkingCheckbox.checked = true;
+                chunkSecondsInput.disabled = true;
+            } else {
+                disableChunkingCheckbox.checked = false;
+                chunkSecondsInput.disabled = false;
+            }
+        } catch (err) {
+            console.warn('청크 비활성화 설정 불러오기 실패', err);
+        }
+    }
+
     function persistChunkSeconds(value) {
         if (!chunkSecondsInput) return;
         try {
@@ -91,6 +109,19 @@
             }
         } catch (err) {
             console.warn('청크 길이 저장에 실패했습니다.', err);
+        }
+    }
+
+    function persistDisableChunking(enabled) {
+        if (!disableChunkingCheckbox) return;
+        try {
+            if (enabled) {
+                localStorage.setItem(DISABLE_STORAGE_KEY, '1');
+            } else {
+                localStorage.removeItem(DISABLE_STORAGE_KEY);
+            }
+        } catch (err) {
+            console.warn('청크 비활성화 설정 저장 실패', err);
         }
     }
 
@@ -209,6 +240,13 @@
                 persistChunkSeconds(val);
             }
         });
+        disableChunkingCheckbox?.addEventListener('change', () => {
+            if (!chunkSecondsInput) return;
+            const disabled = disableChunkingCheckbox.checked;
+            chunkSecondsInput.disabled = disabled;
+            // if disabling chunking we don't need to persist chunk value
+            persistDisableChunking(disabled);
+        });
     }
 
     function addYoutubeUrlFromInput() {
@@ -260,11 +298,17 @@
             showAlert('파일을 추가하거나 YouTube 링크를 입력해 주세요.');
             return;
         }
-        const chunkSecondsValue = parseFloat(chunkSecondsInput?.value || '30');
-        if (!Number.isFinite(chunkSecondsValue) || chunkSecondsValue <= 0) {
-            showAlert('청크 길이는 초 단위 양수로 입력해 주세요.');
-            chunkSecondsInput?.focus();
-            return;
+        let chunkSecondsValue = parseFloat(chunkSecondsInput?.value || '30');
+        const disableChunking = disableChunkingCheckbox?.checked === true;
+        if (disableChunking) {
+            // When disable chunking, set chunkSeconds to 0 so the server will pass through the source file without splitting
+            chunkSecondsValue = 0;
+        } else {
+            if (!Number.isFinite(chunkSecondsValue) || chunkSecondsValue <= 0) {
+                showAlert('청크 길이는 초 단위 양수로 입력해 주세요.');
+                chunkSecondsInput?.focus();
+                return;
+            }
         }
         persistChunkSeconds(chunkSecondsValue);
         const formData = new FormData();
@@ -275,6 +319,9 @@
             formData.append('youtube_urls', url);
         });
         formData.append('chunk_seconds', String(chunkSecondsValue));
+        if (disableChunking) {
+            formData.append('disable_chunking', '1');
+        }
         const applyHallucinationCleanup = hallucinationToggle ? hallucinationToggle.checked : true;
         formData.append('apply_hallucination_cleanup', applyHallucinationCleanup ? '1' : '0');
         if (hallucinationToggle) {
@@ -309,6 +356,7 @@
     bindSelectBtn();
     bindYoutubeControls();
     loadStoredChunkSeconds();
+    loadStoredDisableChunking();
     loadHallucinationPreference();
     hallucinationToggle?.addEventListener('change', () => {
         persistHallucinationPreference(hallucinationToggle.checked);

@@ -31,10 +31,14 @@ DEFAULT_MODEL_PARAMS = {
 # 전사(Transcribe) 기본값
 DEFAULT_TRANSCRIBE_PARAMS = {
     "beam_size": 5,
+    "no_speech_threshold": 0.7,
+    "temperature": 0.5,
     "vad_filter": True,
-    "vad_parameters": dict(min_silence_duration_ms=500),
+    "vad_parameters": dict(min_silence_duration_ms=700),
     "condition_on_previous_text": False,
-    "word_timestamps": False, # 필요시 True
+    "word_timestamps": True, # 필요시 True
+    "chunk_length": 30,
+    # note: faster-whisper transcribe expects 'chunk_length' (seconds)
 }
 
 class WhisperEngine:
@@ -132,6 +136,7 @@ def main():
     parser.add_argument('--quantization', type=str, default='int8', choices=['int8', 'float16'], help='Compute type')
     parser.add_argument('--lang', type=str, default=None, help='Language code')
     parser.add_argument('--beam_size', type=int, default=5, help='Beam size for decoding')
+    parser.add_argument('--chunk_length', type=int, default=30, help='Chunk length (seconds) for processing')
     
     args = parser.parse_args()
 
@@ -159,6 +164,7 @@ def main():
         args.input_file,
         language=args.lang,
         beam_size=args.beam_size,
+        chunk_length=args.chunk_length,
         initial_prompt=initial_prompt
         # temperature=0.2 <-- 추가 옵션 전달 가능
     )

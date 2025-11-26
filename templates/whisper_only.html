@@ -75,9 +75,15 @@
 
                             <div id="whisper-settings" class="space-y-2">
                                 <label for="whisper-chunk-seconds" class="text-sm font-medium text-slate-700">청크 길이 (초)</label>
-                                <div class="flex flex-col gap-1">
-                                    <input type="number" id="whisper-chunk-seconds" name="chunk_seconds" min="5" step="5" value="240" class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20">
+                                <div class="flex items-center gap-3">
+                                    <!-- Limit the width of the numeric input so the checkbox/label can have sufficient text area -->
+                                    <input type="number" id="whisper-chunk-seconds" name="chunk_seconds" min="5" step="5" value="240" class="flex-none w-16 md:w-20 text-center rounded-lg border border-slate-200 bg-white px-2 py-2 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20" style="min-width:4rem; max-width:6rem;">
+                                    <label class="flex items-center gap-2 text-sm text-slate-700 flex-1 whitespace-normal">
+                                        <input type="checkbox" id="whisper-disable-chunking" name="disable_chunking" value="1" class="h-5 w-5 rounded border-slate-300 text-[#0c77f2] focus:ring-[#0c77f2]">
+                                        <span class="max-w-full">청크 분할 사용 안함</span>
+                                    </label>
                                 </div>
+                                <p class="text-xs text-slate-500">비활성화하면 소스 파일을 분할하지 않고 원본 파일 전체를 그대로 전사합니다.</p>
                             </div>
 
                             <div id="whisper-hallucination-block" class="space-y-3">
