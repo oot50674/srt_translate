@@ -1,5 +1,6 @@
 en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl#sha256=1932429db727d4bff3deed6b34cfc05df17794f4a52eeb26cf8928f7c1a0fb85
 Flask==3.1.1
+Flask-Sock==0.7.0
 google-genai==1.39.1
 ja_core_news_sm @ https://github.com/explosion/spacy-models/releases/download/ja_core_news_sm-3.8.0/ja_core_news_sm-3.8.0-py3-none-any.whl#sha256=65693016b7cf33ffa845af3523a9c9b8d9aabae85dfc2e46731513a5e03def04
 python-dotenv==1.1.1
@@ -16,6 +17,7 @@ numpy==1.26.4
 tokenizers==0.22.1
 packaging==25.0
 protobuf==6.33.1
+simple-websocket==1.0.0
 tqdm==4.67.1
 typing_extensions==4.15.0
 

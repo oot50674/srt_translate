@@ -6,6 +6,7 @@ import time
 import unicodedata
 import uuid
 from dataclasses import dataclass, field
+from queue import Empty, Full, Queue
 from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import parse_qs, urlparse
 
@@ -31,6 +32,57 @@ _LOCK = threading.RLock()
 _WHISPER_LOCK = threading.Lock()
 _WHISPER_INSTANCE: Optional[WhisperUtil] = None
 _ACTIVE_BATCHES = 0
+_SUBSCRIBER_LOCK = threading.RLock()
+_BATCH_SUBSCRIBERS: Dict[str, List[Queue]] = {}
+
+
+def _enqueue_state(target_queue: Queue, payload: Dict[str, Any]) -> None:
+    try:
+        target_queue.put_nowait(payload)
+    except Full:
+        try:
+            target_queue.get_nowait()
+        except Empty:
+            pass
+        try:
+            target_queue.put_nowait(payload)
+        except Full:
+            pass
+
+
+def _publish_batch_state(batch_id: str, payload: Dict[str, Any]) -> None:
+    with _SUBSCRIBER_LOCK:
+        subscribers = list(_BATCH_SUBSCRIBERS.get(batch_id, ()))
+    for subscriber in subscribers:
+        _enqueue_state(subscriber, payload)
+
+
+def subscribe_to_batch_updates(batch_id: str) -> Queue:
+    subscriber: Queue = Queue(maxsize=32)
+    with _SUBSCRIBER_LOCK:
+        _BATCH_SUBSCRIBERS.setdefault(batch_id, []).append(subscriber)
+    return subscriber
+
+
+def unsubscribe_from_batch_updates(batch_id: str, subscriber: Queue) -> None:
+    with _SUBSCRIBER_LOCK:
+        listeners = _BATCH_SUBSCRIBERS.get(batch_id)
+        if not listeners:
+            return
+        try:
+            listeners.remove(subscriber)
+        except ValueError:
+            pass
+        if not listeners:
+            _BATCH_SUBSCRIBERS.pop(batch_id, None)
+
+
+def _broadcast_batch_state(batch: "WhisperBatch") -> None:
+    try:
+        payload = batch.to_dict()
+    except Exception:
+        return
+    _publish_batch_state(batch.batch_id, payload)
 
 
 def _get_whisper() -> WhisperUtil:
@@ -209,6 +261,7 @@ class WhisperBatchItem:
     download_ready: bool = False
     speech_timeline: List[Dict[str, float]] = field(default_factory=list)
     apply_hallucination_cleanup: bool = True
+    segment_progress: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self, batch_id: str) -> Dict[str, Any]:
         download_url = None
@@ -224,6 +277,7 @@ class WhisperBatchItem:
             "download_url": download_url,
             "updated_at": self.updated_at,
             "apply_hallucination_cleanup": self.apply_hallucination_cleanup,
+            "segment_progress": self.segment_progress,
         }
 
 
@@ -280,6 +334,70 @@ def _filter_uploads(files: Iterable[Optional[FileStorage]]) -> List[FileStorage]
     return uploads
 
 
+def _initialize_segment_progress(
+    batch: WhisperBatch,
+    item: WhisperBatchItem,
+    segments: List[SegmentMetadata],
+) -> None:
+    details: List[Dict[str, Any]] = []
+    for idx, meta in enumerate(segments, start=1):
+        details.append(
+            {
+                "segment_index": idx,
+                "start_time": float(getattr(meta, "start_time", 0.0) or 0.0),
+                "end_time": float(getattr(meta, "end_time", 0.0) or 0.0),
+                "start_timecode": _format_timestamp(getattr(meta, "start_time", 0.0) or 0.0),
+                "end_timecode": _format_timestamp(getattr(meta, "end_time", 0.0) or 0.0),
+                "duration": float(getattr(meta, "duration", 0.0) or 0.0),
+                "status": "pending",
+                "progress": 0.0,
+                "message": "대기 중",
+                "updated_at": time.time(),
+            }
+        )
+    item.segment_progress = details
+    if details:
+        batch.touch()
+        _broadcast_batch_state(batch)
+
+
+def _update_segment_progress(
+    batch: WhisperBatch,
+    item: WhisperBatchItem,
+    segment_idx: int,
+    *,
+    status: Optional[str] = None,
+    progress: Optional[float] = None,
+    message: Optional[str] = None,
+) -> None:
+    if segment_idx < 0 or segment_idx >= len(item.segment_progress):
+        return
+    entry = item.segment_progress[segment_idx]
+    if status:
+        entry["status"] = status
+    if progress is not None:
+        entry["progress"] = max(0.0, min(1.0, progress))
+    if message is not None:
+        entry["message"] = message
+    entry["updated_at"] = time.time()
+    batch.touch()
+    _broadcast_batch_state(batch)
+
+
+def _mark_all_segments_failed(batch: WhisperBatch, item: WhisperBatchItem, error: str) -> None:
+    changed = False
+    for entry in item.segment_progress:
+        if entry.get("status") not in {"completed", "failed"}:
+            entry["status"] = "failed"
+            entry["progress"] = entry.get("progress", 0.0)
+            entry["message"] = error
+            entry["updated_at"] = time.time()
+            changed = True
+    if changed:
+        batch.touch()
+        _broadcast_batch_state(batch)
+
+
 def _update_item(
     batch: WhisperBatch,
     item: WhisperBatchItem,
@@ -299,6 +417,7 @@ def _update_item(
         item.error = error
     item.updated_at = time.time()
     batch.touch()
+    _broadcast_batch_state(batch)
 
 
 def _ensure_source_path(batch: WhisperBatch, item: WhisperBatchItem) -> str:
@@ -330,6 +449,27 @@ def _transcribe_segments(
     whisper = _get_whisper()
     entries: List[Dict[str, Any]] = []
     total = len(segments) or 1
+
+    def _build_segment_progress_callback(segment_idx: int, duration_seconds: float):
+        safe_duration = max(duration_seconds, 0.001)
+
+        def _callback(snippet: Dict[str, Any]) -> None:
+            snippet_end = float(snippet.get("end", 0.0) or 0.0)
+            ratio = max(0.0, min(1.0, snippet_end / safe_duration))
+            preview = str(snippet.get("text", "")).strip() or "전사 중"
+            if len(preview) > 80:
+                preview = preview[:77] + "..."
+            _update_segment_progress(
+                batch,
+                item,
+                segment_idx,
+                status="running",
+                progress=ratio,
+                message=preview,
+            )
+
+        return _callback
+
     for idx, segment in enumerate(segments, start=1):
         _update_item(
             batch,
@@ -337,7 +477,35 @@ def _transcribe_segments(
             progress=(idx - 1) / total,
             message=f"{idx}/{total}개 세그먼트 전사 중...",
         )
-        result = whisper.transcribe_audio(segment.file_path, show_progress=False)
+        _update_segment_progress(
+            batch,
+            item,
+            idx - 1,
+            status="running",
+            progress=0.0,
+            message="전사 중",
+        )
+        segment_duration = float(getattr(segment, "duration", 0.0) or 0.0)
+        if segment_duration <= 0.0:
+            segment_duration = float(segment.end_time - segment.start_time)
+        if segment_duration <= 0.0:
+            segment_duration = 0.001
+        try:
+            progress_callback = _build_segment_progress_callback(idx - 1, segment_duration)
+            result = whisper.transcribe_audio(
+                segment.file_path,
+                show_progress=False,
+                progress_callback=progress_callback,
+            )
+        except Exception as exc:
+            _update_segment_progress(
+                batch,
+                item,
+                idx - 1,
+                status="failed",
+                message=str(exc),
+            )
+            raise
         for snippet in result.get("segments", []) or []:
             text = str(snippet.get("text", "")).strip()
             if not text:
@@ -351,6 +519,14 @@ def _transcribe_segments(
                     "text": text,
                 }
             )
+        _update_segment_progress(
+            batch,
+            item,
+            idx - 1,
+            status="completed",
+            progress=1.0,
+            message="완료",
+        )
     if not entries:
         entries.append({"start": 0.0, "end": 0.5, "text": "[NO SPEECH DETECTED]"})
     entries.sort(key=lambda entry: entry["start"])
@@ -417,6 +593,7 @@ def _process_item(batch: WhisperBatch, item: WhisperBatchItem) -> None:
                 storage_key=storage_key,
                 prefix="segment",
             )
+        _initialize_segment_progress(batch, item, segments)
         aggregated_segments: List[Dict[str, float]] = []
         for meta in segments:
             for speech in meta.speech_segments or []:
@@ -440,6 +617,7 @@ def _process_item(batch: WhisperBatch, item: WhisperBatchItem) -> None:
         final_message = "전사를 완료했습니다."
         _update_item(batch, item, status="completed", progress=1.0, message=final_message)
     except Exception as exc:
+        _mark_all_segments_failed(batch, item, str(exc))
         _update_item(batch, item, status="failed", message=str(exc), error=str(exc))
 
 
@@ -456,6 +634,7 @@ def _run_batch(batch: WhisperBatch) -> None:
         raise
     finally:
         batch.touch()
+        _broadcast_batch_state(batch)
         _decrement_active_batches()
 
 
@@ -529,6 +708,7 @@ def create_batch(
     )
     with _LOCK:
         _BATCHES[batch_id] = batch
+    _broadcast_batch_state(batch)
     batch.start_worker()
     return batch.to_dict()
 

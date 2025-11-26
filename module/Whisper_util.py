@@ -8,7 +8,7 @@ CUDA 지원 여부에 따라 GPU large-v3 또는 CPU int8 모델을 선택하며
 import os
 import time
 import threading
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from module.WhisperEngine import (
     DEFAULT_MODEL_PARAMS,
@@ -190,6 +190,7 @@ class WhisperUtil:
         no_speech_threshold: Optional[float] = None,
         temperature: Optional[float] = None,
         compression_ratio_threshold: Optional[float] = None,
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> Dict[str, Any]:
         """
         음성/비디오 파일을 텍스트로 변환합니다.
@@ -249,7 +250,9 @@ class WhisperUtil:
 
             try:
                 result = self.process_runner.transcribe(
-                    audio_path, **transcribe_kwargs
+                    audio_path,
+                    progress_callback=progress_callback,
+                    **transcribe_kwargs,
                 )
             except WhisperEngineInitError as exc:
                 # CPU 폴백을 배제하고 GPU에서만 동작하도록 강제

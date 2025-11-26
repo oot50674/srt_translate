@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import multiprocessing as mp
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 
 class WhisperEngineInitError(RuntimeError):
@@ -39,13 +39,13 @@ def _worker(req_q: "mp.Queue[Dict[str, Any] | None]", res_q: "mp.Queue[Dict[str,
                 text_value = str(getattr(seg, "text", "")).strip()
                 if text_value:
                     texts.append(text_value)
-                segments_data.append(
-                    {
-                        "start": start_value,
-                        "end": end_value,
-                        "text": text_value,
-                    }
-                )
+                entry = {
+                    "start": start_value,
+                    "end": end_value,
+                    "text": text_value,
+                }
+                segments_data.append(entry)
+                res_q.put({"ok": True, "partial": True, "segment": entry})
 
             info_data = {
                 "language": getattr(info, "language", None) if info else None,
@@ -55,6 +55,7 @@ def _worker(req_q: "mp.Queue[Dict[str, Any] | None]", res_q: "mp.Queue[Dict[str,
             res_q.put(
                 {
                     "ok": True,
+                    "complete": True,
                     "segments": segments_data,
                     "text": " ".join(texts).strip(),
                     "info": info_data,
@@ -90,18 +91,33 @@ class WhisperProcessRunner:
         )
         self.proc.start()
 
-    def transcribe(self, audio_path: str, **kwargs: Any) -> Dict[str, Any]:
+    def transcribe(
+        self,
+        audio_path: str,
+        *,
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
         self._ensure_running()
         self.req_q.put({"audio_path": audio_path, "kwargs": kwargs})
-        result = self.res_q.get()
-        if not result.get("ok"):
-            if result.get("init_error"):
-                self.stop()
-                error = result.get("error", "WhisperEngine 초기화 실패")
-                raise WhisperEngineInitError(error)
-            error = result.get("error", "Unknown error")
-            raise RuntimeError(f"Whisper 프로세스 오류: {error}")
-        return result
+        while True:
+            result = self.res_q.get()
+            if result.get("partial"):
+                if progress_callback:
+                    try:
+                        progress_callback(result.get("segment") or {})
+                    except Exception:
+                        pass
+                continue
+
+            if not result.get("ok"):
+                if result.get("init_error"):
+                    self.stop()
+                    error = result.get("error", "WhisperEngine 초기화 실패")
+                    raise WhisperEngineInitError(error)
+                error = result.get("error", "Unknown error")
+                raise RuntimeError(f"Whisper 프로세스 오류: {error}")
+            return result
 
     def stop(self, timeout: float = 5.0) -> None:
         if self.proc is None:

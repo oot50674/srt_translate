@@ -3,8 +3,11 @@ import os
 import tempfile
 import json
 import uuid
+from queue import Empty
 from typing import Optional, Dict, List, Any, Tuple
 from flask import Flask, render_template, request, jsonify, Response, send_file, abort
+from flask_sock import Sock
+from simple_websocket import ConnectionClosed
 from dotenv import load_dotenv
 from module import srt_module, ffmpeg_module
 from module.gemini_module import GeminiClientOptions
@@ -44,12 +47,15 @@ from module.whisper_batch import (
     get_batch_state as get_whisper_batch_state,
     get_item_transcript_path as get_whisper_transcript_path,
     has_batch as has_whisper_batch,
+    subscribe_to_batch_updates,
+    unsubscribe_from_batch_updates,
 )
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+sock = Sock(app)
 
 # 서버 기동 시 오래된 생성물(영상/스냅샷/로그)을 정리합니다. 기본값: 3일
 try:
@@ -376,6 +382,50 @@ def api_get_whisper_batch(batch_id: str):
     if not batch:
         return jsonify({'error': 'not found'}), 404
     return jsonify(batch)
+
+
+@sock.route('/ws/whisper/batch/<batch_id>')
+def ws_whisper_batch(ws, batch_id: str):  # type: ignore[override]
+    if not has_whisper_batch(batch_id):
+        try:
+            ws.send(json.dumps({'type': 'error', 'error': 'not found'}))
+        except ConnectionClosed:
+            pass
+        ws.close()
+        return
+
+    subscriber = subscribe_to_batch_updates(batch_id)
+    try:
+        initial_state = get_whisper_batch_state(batch_id)
+        if initial_state:
+            try:
+                ws.send(json.dumps({'type': 'batch_state', 'payload': initial_state}))
+            except ConnectionClosed:
+                return
+            if initial_state.get('status') in {'completed', 'failed'}:
+                return
+
+        while True:
+            try:
+                update = subscriber.get(timeout=30.0)
+            except Empty:
+                if getattr(ws, 'closed', False):
+                    break
+                try:
+                    ws.send(json.dumps({'type': 'ping'}))
+                except ConnectionClosed:
+                    break
+                continue
+
+            try:
+                ws.send(json.dumps({'type': 'batch_state', 'payload': update}))
+            except ConnectionClosed:
+                break
+            if update.get('status') in {'completed', 'failed'}:
+                break
+    finally:
+        unsubscribe_from_batch_updates(batch_id, subscriber)
+
 
 
 @app.route('/api/whisper/batch/<batch_id>/items/<item_id>/download', methods=['GET'])
