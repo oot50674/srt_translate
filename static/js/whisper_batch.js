@@ -47,7 +47,6 @@
             websocketFailures: 0,
             usePollingFallback: !('WebSocket' in window),
             ignoreSocketAlerts: false,
-            segmentScrollMap: new Map(),
             boundCleanup: null,
             init() {
                 if (!this.batchId) {
@@ -129,33 +128,6 @@
             segmentStatusLabel(status) {
                 return SEGMENT_STATUS_LABEL[status] || status || '대기';
             },
-            cacheSegmentScroll() {
-                if (!this.$refs?.filesList) return;
-                // 세그먼트 리스트의 스크롤 위치를 저장해 새 데이터에서도 위치를 유지한다.
-                this.segmentScrollMap.clear();
-                const cards = this.$refs.filesList.querySelectorAll('.file-card');
-                cards.forEach((card) => {
-                    const fileName = card?.dataset?.fileName;
-            const container = card.querySelector('.segment-list-container');
-            if (fileName && container) {
-                        this.segmentScrollMap.set(fileName, container.scrollTop);
-            }
-        });
-            },
-            restoreSegmentScroll() {
-                if (!this.$refs?.filesList || this.segmentScrollMap.size === 0) return;
-                // DOM 갱신 이후에 저장된 스크롤 값을 다시 적용한다.
-                this.$nextTick(() => {
-                    const cards = this.$refs.filesList.querySelectorAll('.file-card');
-                    cards.forEach((card) => {
-                        const fileName = card?.dataset?.fileName;
-            const container = card.querySelector('.segment-list-container');
-                        if (fileName && container && this.segmentScrollMap.has(fileName)) {
-                            container.scrollTop = this.segmentScrollMap.get(fileName);
-            }
-        });
-                });
-            },
             updateSummary(data = {}) {
                 const totalItems = data?.total_items ?? 0;
                 const completedItems = data?.completed_items ?? 0;
@@ -181,9 +153,7 @@
                     this.files = [];
                     return;
                 }
-                this.cacheSegmentScroll();
                 this.files = items.map((file) => ({ ...file }));
-                this.restoreSegmentScroll();
             },
             handleData(data) {
                 this.clearAlert();

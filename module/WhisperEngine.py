@@ -33,6 +33,8 @@ DEFAULT_TRANSCRIBE_PARAMS = {
     "beam_size": 5,
     "no_speech_threshold": 0.7,
     "temperature": 0.5,
+    "repetition_penalty": 1.0,
+    "no_repeat_ngram_size": 0,
     "vad_filter": True,
     "vad_parameters": dict(min_silence_duration_ms=700),
     "condition_on_previous_text": False,

@@ -97,6 +97,8 @@ class WhisperUtil:
         self.no_speech_threshold = 0.8
         self.temperature = 0.4
         self.compression_ratio_threshold = 2.2
+        self.repetition_penalty = 1.05
+        self.no_repeat_ngram_size = 3
         self.engine: Optional[WhisperEngine] = None  # 타입 힌트 유지
         self.process_runner: Optional[WhisperProcessRunner] = None
         self._init_process_runner()
@@ -190,6 +192,8 @@ class WhisperUtil:
         no_speech_threshold: Optional[float] = None,
         temperature: Optional[float] = None,
         compression_ratio_threshold: Optional[float] = None,
+        repetition_penalty: Optional[float] = None,
+        no_repeat_ngram_size: Optional[int] = None,
         progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> Dict[str, Any]:
         """
@@ -241,12 +245,20 @@ class WhisperUtil:
                 if compression_ratio_threshold is None
                 else compression_ratio_threshold
             )
+            repetition_penalty_value = (
+                self.repetition_penalty if repetition_penalty is None else repetition_penalty
+            )
+            no_repeat_value = (
+                self.no_repeat_ngram_size if no_repeat_ngram_size is None else no_repeat_ngram_size
+            )
             transcribe_kwargs: Dict[str, Any] = dict(DEFAULT_TRANSCRIBE_PARAMS)
             if language:
                 transcribe_kwargs["language"] = language
             transcribe_kwargs["no_speech_threshold"] = no_speech_value
             transcribe_kwargs["compression_ratio_threshold"] = compression_value
             transcribe_kwargs["temperature"] = temperature_value
+            transcribe_kwargs["repetition_penalty"] = repetition_penalty_value
+            transcribe_kwargs["no_repeat_ngram_size"] = no_repeat_value
 
             try:
                 result = self.process_runner.transcribe(
