@@ -346,10 +346,8 @@ def api_create_whisper_batch():
     if single_url:
         youtube_urls.append(single_url)
     chunk_seconds_raw = request.form.get('chunk_seconds') or 30
-    vad_cleanup_raw = (request.form.get('apply_vad_cleanup') or '1').strip().lower()
-    vad_sync_raw = (request.form.get('apply_vad_sync') or '1').strip().lower()
-    apply_vad_cleanup = vad_cleanup_raw not in {'0', 'false', 'off'}
-    apply_vad_sync = vad_sync_raw not in {'0', 'false', 'off'}
+    hallucination_cleanup_raw = (request.form.get('apply_hallucination_cleanup') or '1').strip().lower()
+    apply_hallucination_cleanup = hallucination_cleanup_raw not in {'0', 'false', 'off'}
     try:
         chunk_seconds = float(chunk_seconds_raw)
     except (TypeError, ValueError):
@@ -359,8 +357,7 @@ def api_create_whisper_batch():
             files=files,
             chunk_seconds=chunk_seconds,
             youtube_urls=youtube_urls,
-            apply_vad_cleanup=apply_vad_cleanup,
-            apply_vad_sync=apply_vad_sync,
+            apply_hallucination_cleanup=apply_hallucination_cleanup,
         )
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400

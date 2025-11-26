@@ -17,8 +17,13 @@ snapshots/
 download_video/
 database.db
 ffmpeg-8.0/
+libs/
+whisper_batches/
+test.mp3
 *.db
 .git/
 .gitignore
+*.dll
+*.pyd
 
 

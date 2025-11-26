@@ -4,6 +4,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
+    # PyTorch CUDA 12.4 빌드 인덱스 URL
     PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cu124
 
 # 국내 미러로 변경하여 apt 속도 향상
@@ -19,17 +20,21 @@ RUN apt-get update \
         portaudio19-dev \
         build-essential \
         ca-certificates \
-        python3.11 \
-        python3.11-dev \
-        python3.11-venv \
+        python3.10 \
+        python3.10-dev \
+        python3.10-venv \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# venv 생성
-RUN python3.11 -m venv /opt/venv \
+# venv 생성 (Ubuntu 22.04 기본 파이썬은 3.10)
+RUN python3.10 -m venv /opt/venv \
     && /opt/venv/bin/python -m ensurepip
 
 ENV PATH="/opt/venv/bin:${PATH}"
+
+# pip로 설치한 nvidia-cudnn-cu12 / nvidia-cublas-cu12 라이브러리 경로를 미리 등록
+ENV NVIDIA_PIP_LIB="/opt/venv/lib/python3.10/site-packages/nvidia"
+ENV LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu:/usr/local/cuda/lib64:${NVIDIA_PIP_LIB}/cudnn/lib:${NVIDIA_PIP_LIB}/cublas/lib:${LD_LIBRARY_PATH}"
 
 WORKDIR /app
 

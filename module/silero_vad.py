@@ -7,7 +7,20 @@ import tempfile
 import subprocess
 import logging
 
+from module.cuda_runtime import register_embedded_cuda
+
+register_embedded_cuda()
+
 import torch
+try:
+    import torchaudio
+    try:
+        torchaudio.set_audio_backend("soundfile")
+    except Exception:
+        # soundfile 백엔드가 없으면 기본 sox/ffmpeg 백엔드를 사용
+        pass
+except Exception:
+    torchaudio = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 

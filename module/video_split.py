@@ -9,6 +9,10 @@ import tempfile
 from dataclasses import asdict, dataclass, field
 from typing import Dict, Iterable, List, Sequence, Optional
 
+from module.cuda_runtime import register_embedded_cuda
+
+register_embedded_cuda()
+
 import torch
 
 from module.ffmpeg_module import (

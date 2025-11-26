@@ -16,10 +16,6 @@
     const filesList = document.getElementById('whisper-files-list');
     const filesPlaceholder = document.getElementById('whisper-files-placeholder');
     const updatedAtEl = document.getElementById('whisper-updated-at');
-    const vadCleanupText = document.getElementById('whisper-vad-cleanup-text');
-    const vadCleanupSummary = document.getElementById('whisper-vad-cleanup-summary');
-    const vadSyncText = document.getElementById('whisper-vad-sync-text');
-    const vadSyncSummary = document.getElementById('whisper-vad-sync-summary');
 
     const STATUS_BADGE = {
         pending: 'bg-slate-100 text-slate-600',
@@ -71,34 +67,6 @@
         if (completeCountEl) completeCountEl.textContent = data.completed_items ?? 0;
         if (failedCountEl) failedCountEl.textContent = data.failed_items ?? 0;
         if (updatedAtEl) updatedAtEl.textContent = `업데이트: ${formatTime(data.updated_at)}`;
-        const cleanupEnabled = !!data.apply_vad_cleanup;
-        if (vadCleanupText) {
-            vadCleanupText.textContent = cleanupEnabled
-                ? '무음 환각 제거: 사용 (VAD 기반 삭제 적용)'
-                : '무음 환각 제거: 미사용';
-        }
-        if (vadCleanupSummary) {
-            vadCleanupSummary.classList.toggle('bg-amber-50', !cleanupEnabled);
-            vadCleanupSummary.classList.toggle('border-amber-200', !cleanupEnabled);
-            vadCleanupSummary.classList.toggle('text-amber-700', !cleanupEnabled);
-            vadCleanupSummary.classList.toggle('bg-slate-50', cleanupEnabled);
-            vadCleanupSummary.classList.toggle('border-slate-200', cleanupEnabled);
-            vadCleanupSummary.classList.toggle('text-slate-700', cleanupEnabled);
-        }
-        const vadEnabled = !!data.apply_vad_sync;
-        if (vadSyncText) {
-            vadSyncText.textContent = vadEnabled
-                ? 'VAD 싱크 보정: 사용 (시작/끝 타임라인 스냅)'
-                : 'VAD 싱크 보정: 미사용 (원본 타임스탬프 유지)';
-        }
-        if (vadSyncSummary) {
-            vadSyncSummary.classList.toggle('bg-amber-50', !vadEnabled);
-            vadSyncSummary.classList.toggle('border-amber-200', !vadEnabled);
-            vadSyncSummary.classList.toggle('text-amber-700', !vadEnabled);
-            vadSyncSummary.classList.toggle('bg-slate-50', vadEnabled);
-            vadSyncSummary.classList.toggle('border-slate-200', vadEnabled);
-            vadSyncSummary.classList.toggle('text-slate-700', vadEnabled);
-        }
     }
 
     function buildFileCard(item) {

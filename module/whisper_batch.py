@@ -19,13 +19,6 @@ from module.video_split import (
     split_video_by_minutes,
 )
 from module.Whisper_util import WhisperUtil
-from module import srt_module
-from module.subtitle_sync import (
-    SyncConfig,
-    cleanup_subtitles,
-    sync_subtitles,
-    export_srt,
-)
 from module.hallucination_filter import fix_repetitive_hallucinations
 
 
@@ -213,10 +206,8 @@ class WhisperBatchItem:
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     download_ready: bool = False
-    apply_vad_cleanup: bool = True
-    apply_vad_sync: bool = True
     speech_timeline: List[Dict[str, float]] = field(default_factory=list)
-    silent_entries_removed: int = 0
+    apply_hallucination_cleanup: bool = True
 
     def to_dict(self, batch_id: str) -> Dict[str, Any]:
         download_url = None
@@ -231,9 +222,7 @@ class WhisperBatchItem:
             "transcript_ready": bool(download_url and self.download_ready),
             "download_url": download_url,
             "updated_at": self.updated_at,
-            "apply_vad_cleanup": self.apply_vad_cleanup,
-            "apply_vad_sync": self.apply_vad_sync,
-            "silent_entries_removed": self.silent_entries_removed,
+            "apply_hallucination_cleanup": self.apply_hallucination_cleanup,
         }
 
 
@@ -242,8 +231,7 @@ class WhisperBatch:
     batch_id: str
     chunk_seconds: float
     base_dir: str
-    apply_vad_cleanup: bool = True
-    apply_vad_sync: bool = True
+    apply_hallucination_cleanup: bool = True
     items: List[WhisperBatchItem] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
@@ -263,8 +251,7 @@ class WhisperBatch:
         return {
             "batch_id": self.batch_id,
             "chunk_seconds": self.chunk_seconds,
-            "apply_vad_cleanup": self.apply_vad_cleanup,
-            "apply_vad_sync": self.apply_vad_sync,
+            "apply_hallucination_cleanup": self.apply_hallucination_cleanup,
             "status": self.status,
             "items": entries,
             "total_items": len(entries),
@@ -336,6 +323,8 @@ def _transcribe_segments(
     batch: WhisperBatch,
     item: WhisperBatchItem,
     segments: List[SegmentMetadata],
+    *,
+    apply_hallucination_cleanup: bool,
 ) -> str:
     whisper = _get_whisper()
     entries: List[Dict[str, Any]] = []
@@ -364,118 +353,37 @@ def _transcribe_segments(
     if not entries:
         entries.append({"start": 0.0, "end": 0.5, "text": "[NO SPEECH DETECTED]"})
     entries.sort(key=lambda entry: entry["start"])
-    try:
-        entries, hallucination_stats = fix_repetitive_hallucinations(
-            entries,
-            item.source_path,
-            whisper=whisper,
-        )
-        flagged = hallucination_stats.get("flagged", 0)
-        retranscribed = hallucination_stats.get("retranscribed", 0)
-        if flagged or retranscribed:
-            _update_item(
-                batch,
-                item,
-                message=f"환각 의심 자막 {retranscribed}건 재전사, {flagged}건 표시 처리 중...",
+    
+    print(f"DEBUG: Transcription finished. Entries: {len(entries)}")
+
+    if apply_hallucination_cleanup:
+        print("DEBUG: Starting hallucination cleanup")
+        try:
+            entries, hallucination_stats = fix_repetitive_hallucinations(
+                entries,
+                item.source_path,
+                whisper=whisper,
             )
-    except Exception as exc:
-        _update_item(batch, item, message=f"환각 반복 검사 건너뜀: {exc}")
+            flagged = hallucination_stats.get("flagged", 0)
+            retranscribed = hallucination_stats.get("retranscribed", 0)
+            if flagged or retranscribed:
+                _update_item(
+                    batch,
+                    item,
+                    message=f"환각 의심 자막 {retranscribed}건 재전사, {flagged}건 표시 처리 중...",
+                )
+            print("DEBUG: Hallucination cleanup finished")
+        except Exception as exc:
+            print(f"DEBUG: Hallucination cleanup failed: {exc}")
+            _update_item(batch, item, message=f"환각 반복 검사 건너뜀: {exc}")
+    
+    print("DEBUG: Writing SRT")
     transcript_dir = _ensure_dir(item.output_dir)
     base_name = os.path.splitext(item.file_name)[0] or item.item_id
     target_name = _sanitize_filename(f"{base_name}.srt", f"{item.item_id}.srt")
     dest = os.path.join(transcript_dir, target_name)
     _write_srt(entries, dest)
     return dest
-
-
-def _apply_vad_sync(batch: WhisperBatch, item: WhisperBatchItem, *, apply_cleanup: bool) -> bool:
-    if not item.transcript_path or not os.path.isfile(item.transcript_path):
-        item.download_ready = False
-        return False
-    item.download_ready = False
-    _update_item(batch, item, message="VAD 싱크 보정 중입니다...")
-    try:
-        subtitles = srt_module.read_srt(item.transcript_path)
-        config = SyncConfig(chunk_mode="individual", remove_silent_entries=apply_cleanup)
-        segments_source = item.speech_timeline if item.speech_timeline else None
-        synced, stats = sync_subtitles(
-            subtitles,
-            item.source_path,
-            config,
-            precomputed_segments=segments_source,
-        )
-        if stats.get("status") != "success":
-            _update_item(
-                batch,
-                item,
-                message=f"VAD 보정 건너뜀 ({stats.get('status')})",
-            )
-            item.silent_entries_removed = 0
-            return False
-        synced_content = export_srt(synced)
-        with open(item.transcript_path, "w", encoding="utf-8") as fp:
-            fp.write(synced_content)
-        removed_silent = stats.get("silent_entries_removed", 0)
-        item.silent_entries_removed = removed_silent if apply_cleanup else 0
-        summary_msg = f"VAD 싱크 보정을 완료했습니다. (무음 엔트리 {item.silent_entries_removed}개 제거)"
-        _update_item(batch, item, message=summary_msg)
-        return True
-    except Exception as exc:
-        _update_item(
-            batch,
-            item,
-            message=f"VAD 싱크 보정 실패: {exc}",
-            error=str(exc),
-        )
-        item.silent_entries_removed = 0
-        return False
-    finally:
-        item.download_ready = bool(item.transcript_path and os.path.isfile(item.transcript_path))
-
-
-def _apply_vad_cleanup_only(batch: WhisperBatch, item: WhisperBatchItem) -> bool:
-    if not item.transcript_path or not os.path.isfile(item.transcript_path):
-        item.download_ready = False
-        return False
-    item.download_ready = False
-    _update_item(batch, item, message="무음 환각 자막 제거 중입니다...")
-    try:
-        subtitles = srt_module.read_srt(item.transcript_path)
-        config = SyncConfig(remove_silent_entries=True)
-        segments_source = item.speech_timeline if item.speech_timeline else None
-        cleaned, stats = cleanup_subtitles(
-            subtitles,
-            item.source_path,
-            config,
-            precomputed_segments=segments_source,
-        )
-        if stats.get("status") != "success":
-            _update_item(
-                batch,
-                item,
-                message=f"환각 제거 건너뜀 ({stats.get('status')})",
-            )
-            item.silent_entries_removed = 0
-            return False
-        cleaned_content = export_srt(cleaned)
-        with open(item.transcript_path, "w", encoding="utf-8") as fp:
-            fp.write(cleaned_content)
-        removed_silent = stats.get("silent_entries_removed", 0)
-        item.silent_entries_removed = removed_silent
-        summary_msg = f"무음 환각 자막 제거를 완료했습니다. (삭제 {removed_silent}개)"
-        _update_item(batch, item, message=summary_msg)
-        return True
-    except Exception as exc:
-        _update_item(
-            batch,
-            item,
-            message=f"무음 환각 제거 실패: {exc}",
-            error=str(exc),
-        )
-        item.silent_entries_removed = 0
-        return False
-    finally:
-        item.download_ready = bool(item.transcript_path and os.path.isfile(item.transcript_path))
 
 
 def _process_item(batch: WhisperBatch, item: WhisperBatchItem) -> None:
@@ -501,30 +409,17 @@ def _process_item(batch: WhisperBatch, item: WhisperBatchItem) -> None:
                 aggregated_segments.append({"start": start, "end": end})
         aggregated_segments.sort(key=lambda seg: seg["start"])
         item.speech_timeline = aggregated_segments
-        transcript_path = _transcribe_segments(batch, item, segments)
+        apply_hallucination_cleanup = batch.apply_hallucination_cleanup and item.apply_hallucination_cleanup
+        transcript_path = _transcribe_segments(
+            batch,
+            item,
+            segments,
+            apply_hallucination_cleanup=apply_hallucination_cleanup,
+        )
         item.transcript_path = transcript_path
         item.download_ready = bool(transcript_path and os.path.isfile(transcript_path))
 
-        apply_cleanup = batch.apply_vad_cleanup and item.apply_vad_cleanup
-        apply_sync = batch.apply_vad_sync and item.apply_vad_sync
-
-        if apply_sync:
-            sync_ok = _apply_vad_sync(batch, item, apply_cleanup=apply_cleanup)
-            if sync_ok:
-                final_message = "전사 및 싱크 보정이 완료되었습니다."
-            else:
-                final_message = "전사는 완료했지만 VAD 싱크 보정 결과를 적용하지 못했습니다."
-        elif apply_cleanup:
-            cleanup_ok = _apply_vad_cleanup_only(batch, item)
-            if cleanup_ok:
-                final_message = "전사 및 무음 환각 자막 제거를 완료했습니다."
-            else:
-                final_message = "전사는 완료했지만 무음 환각 자막 제거 결과를 적용하지 못했습니다."
-        else:
-            item.silent_entries_removed = 0
-            final_message = "전사를 완료했습니다. (VAD 후처리 사용 안 함)"
-            _update_item(batch, item, message=final_message)
-
+        final_message = "전사를 완료했습니다."
         _update_item(batch, item, status="completed", progress=1.0, message=final_message)
     except Exception as exc:
         _update_item(batch, item, status="failed", message=str(exc), error=str(exc))
@@ -551,8 +446,7 @@ def create_batch(
     files: Iterable[Optional[FileStorage]],
     chunk_seconds: float = 30.0,
     youtube_urls: Iterable[str] = (),
-    apply_vad_cleanup: bool = True,
-    apply_vad_sync: bool = True,
+    apply_hallucination_cleanup: bool = True,
 ) -> Dict[str, Any]:
     uploads = _filter_uploads(files)
     raw_youtube_urls = list(youtube_urls or [])
@@ -586,8 +480,7 @@ def create_batch(
                 segments_dir=item_segments_dir,
                 output_dir=item_output_dir,
                 downloads_dir=uploads_dir,
-                apply_vad_cleanup=apply_vad_cleanup,
-                apply_vad_sync=apply_vad_sync,
+                apply_hallucination_cleanup=apply_hallucination_cleanup,
             )
         )
 
@@ -605,8 +498,7 @@ def create_batch(
                 output_dir=item_output_dir,
                 youtube_url=url,
                 downloads_dir=youtube_dir,
-                apply_vad_cleanup=apply_vad_cleanup,
-                apply_vad_sync=apply_vad_sync,
+                apply_hallucination_cleanup=apply_hallucination_cleanup,
             )
         )
 
@@ -614,8 +506,7 @@ def create_batch(
         batch_id=batch_id,
         chunk_seconds=chunk_seconds,
         base_dir=batch_dir,
-        apply_vad_cleanup=apply_vad_cleanup,
-        apply_vad_sync=apply_vad_sync,
+        apply_hallucination_cleanup=apply_hallucination_cleanup,
         items=items,
     )
     with _LOCK:

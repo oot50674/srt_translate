@@ -26,6 +26,10 @@ from dataclasses import dataclass, asdict
 from functools import lru_cache
 from typing import Dict, Iterable, List, Set, Tuple
 
+from module.cuda_runtime import register_embedded_cuda
+
+register_embedded_cuda()
+
 import spacy
 try:
     import spacy_stanza
