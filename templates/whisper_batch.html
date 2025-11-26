@@ -10,10 +10,16 @@
     <link href="https://fonts.googleapis.com/css2?family=Work+Sans:wght@400;500;600;700&family=Noto+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet" />
     <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        [x-cloak] {
+            display: none !important;
+        }
+    </style>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
 </head>
 
 <body class="bg-slate-100" style='font-family: "Work Sans", "Noto Sans", sans-serif;' data-batch-id="{{ batch_id }}">
-    <div class="relative flex min-h-screen size-full flex-col">
+    <div class="relative flex min-h-screen size-full flex-col" x-data='whisperBatchState({{ batch_id | tojson | safe }})' x-cloak>
         <div class="layout-container flex h-full grow flex-col">
             <header id="page-header" class="flex items-center justify-between whitespace-nowrap border-b border-solid border-b-slate-200 px-10 py-4 bg-white shadow-sm">
                 <div class="flex items-center gap-6">
@@ -36,35 +42,35 @@
 
             <main id="page-main" class="px-4 md:px-10 lg:px-20 py-10">
                 <section id="batch-status-section" class="max-w-5xl mx-auto space-y-6">
-                    <div id="batch-alert" class="hidden rounded-lg border px-4 py-3 text-sm"></div>
+                    <div id="batch-alert" class="rounded-lg border px-4 py-3 text-sm" x-show="hasAlert" x-transition.opacity :class="alertClass" x-text="alert?.message"></div>
 
                     <article id="batch-summary-article" class="bg-white shadow-xl rounded-xl p-6 space-y-5">
                         <div class="flex flex-col gap-2">
-                            <h1 class="text-2xl font-semibold text-slate-900">배치 ID: <span id="whisper-batch-id" class="text-[#0c77f2]">{{ batch_id }}</span></h1>
-                            <p id="whisper-batch-status-text" class="text-sm text-slate-500">진행 중</p>
-                            <p class="text-xs text-slate-500">Whisper 모델: <span id="whisper-model-name" class="font-semibold text-slate-800">-</span></p>
+                            <h1 class="text-2xl font-semibold text-slate-900">배치 ID: <span id="whisper-batch-id" class="text-[#0c77f2]" x-text="batchId"></span></h1>
+                            <p id="whisper-batch-status-text" class="text-sm text-slate-500" x-text="statusLabel"></p>
+                            <p class="text-xs text-slate-500">Whisper 모델: <span id="whisper-model-name" class="font-semibold text-slate-800" x-text="summary.modelName"></span></p>
                         </div>
                         <div class="space-y-2">
                             <div class="flex items-center justify-between text-sm">
                                 <p class="text-slate-600">전체 진행률</p>
-                                <p id="whisper-batch-progress-text" class="font-semibold text-slate-900">0%</p>
+                                <p id="whisper-batch-progress-text" class="font-semibold text-slate-900" x-text="overallPercentText"></p>
                             </div>
                             <div class="w-full rounded-full bg-slate-200 h-3 overflow-hidden">
-                                <div id="whisper-batch-progress-bar" class="h-full rounded-full bg-[#0c77f2] transition-all duration-500" style="width: 0%;"></div>
+                                <div id="whisper-batch-progress-bar" class="h-full rounded-full bg-[#0c77f2] transition-all duration-500" :style="{ width: overallPercentText }"></div>
                             </div>
                         </div>
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                             <div class="rounded-lg border border-slate-200 p-4">
                                 <p class="text-xs text-slate-500">전체 파일</p>
-                                <p id="whisper-total-count" class="text-xl font-semibold text-slate-900 mt-1">0</p>
+                                <p id="whisper-total-count" class="text-xl font-semibold text-slate-900 mt-1" x-text="summary.totalItems"></p>
                             </div>
                             <div class="rounded-lg border border-slate-200 p-4">
                                 <p class="text-xs text-slate-500">완료</p>
-                                <p id="whisper-complete-count" class="text-xl font-semibold text-emerald-600 mt-1">0</p>
+                                <p id="whisper-complete-count" class="text-xl font-semibold text-emerald-600 mt-1" x-text="summary.completedItems"></p>
                             </div>
                             <div class="rounded-lg border border-slate-200 p-4">
                                 <p class="text-xs text-slate-500">실패/중지</p>
-                                <p id="whisper-failed-count" class="text-xl font-semibold text-red-600 mt-1">0</p>
+                                <p id="whisper-failed-count" class="text-xl font-semibold text-red-600 mt-1" x-text="summary.failedItems"></p>
                             </div>
                         </div>
                     </article>
@@ -73,8 +79,51 @@
                         <div class="flex items-center justify-between flex-wrap gap-2">
                             <h2 class="text-xl font-semibold text-slate-900">파일별 진행 상황</h2>
                         </div>
-                        <div id="whisper-files-list" class="space-y-3"></div>
-                        <div id="whisper-files-placeholder" class="rounded-lg border border-dashed border-slate-200 px-4 py-6 text-center text-sm text-slate-500">파일 정보를 불러오는 중입니다.</div>
+                        <div id="whisper-files-list" class="space-y-3" x-ref="filesList" x-show="!filesEmpty">
+                            <template x-for="item in files" :key="item.item_id || item.file_name">
+                                <div class="file-card rounded-lg border border-slate-200 p-4 bg-white flex flex-col gap-3" :data-file-name="item.file_name">
+                                    <div class="flex items-center justify-between gap-3">
+                                        <div class="flex flex-col">
+                                            <p class="text-base font-semibold text-slate-900" x-text="item.file_name"></p>
+                                            <p class="text-xs text-slate-500" x-text="fileSubtitle(item)"></p>
+                                        </div>
+                                        <span class="text-xs font-semibold px-3 py-1 rounded-full" :class="statusBadgeClass(item.status)" x-text="item.status || 'pending'"></span>
+                                    </div>
+                                    <div class="flex items-center justify-between text-xs text-slate-500">
+                                        <span>진행률</span>
+                                        <span x-text="`${filePercent(item)}%`"></span>
+                                    </div>
+                                    <div class="w-full rounded-full bg-slate-200 h-2 overflow-hidden">
+                                        <div class="h-full rounded-full bg-[#0c77f2]" :style="{ width: `${filePercent(item)}%` }"></div>
+                                    </div>
+                                    <div class="rounded-lg border border-slate-100 bg-slate-50 p-3 space-y-2" x-show="hasSegments(item)">
+                                        <p class="text-xs font-semibold text-slate-500">세그먼트 진행률</p>
+                                        <div class="segment-list-container space-y-2 max-h-64 overflow-y-auto pr-1">
+                                            <template x-for="(segment, index) in item.segment_progress" :key="`${item.file_name}-${index}`">
+                                                <div class="space-y-1 rounded-lg bg-white/70 p-3">
+                                                    <div class="flex items-center justify-between text-xs text-slate-500">
+                                                        <span x-text="`세그먼트 #${segment.segment_index ?? index}`"></span>
+                                                        <span class="text-[11px] font-semibold px-2 py-0.5 rounded-full" :class="segmentBadgeClass(segment.status)" x-text="segmentStatusLabel(segment.status)"></span>
+                                                    </div>
+                                                    <div class="flex items-center justify-between text-[11px] text-slate-400">
+                                                        <span x-text="`${segment.start_timecode || '-'} ~ ${segment.end_timecode || '-'}`"></span>
+                                                        <span x-text="segmentPercentText(segment)"></span>
+                                                    </div>
+                                                    <div class="w-full rounded-full bg-slate-200 h-1.5 overflow-hidden">
+                                                        <div class="h-full rounded-full bg-slate-500" :style="{ width: segmentProgressWidth(segment) }"></div>
+                                                    </div>
+                                                    <p class="text-[11px] text-slate-500" x-text="segment.message || ''"></p>
+                                                </div>
+                                            </template>
+                                        </div>
+                                    </div>
+                                    <div class="flex items-center justify-between">
+                                        <a class="rounded-md bg-[#0c77f2] text-white text-xs font-semibold px-3 py-2 hover:bg-blue-600 transition-colors" x-show="item.transcript_ready" :href="item.download_url">SRT 다운로드</a>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+                        <div id="whisper-files-placeholder" class="rounded-lg border border-dashed border-slate-200 px-4 py-6 text-center text-sm text-slate-500" x-show="filesEmpty">파일 정보를 불러오는 중입니다.</div>
                     </section>
 
                 </section>
@@ -86,7 +135,7 @@
         </div>
     </div>
 
-    <script src="{{ url_for('static', filename='js/whisper_batch.js') }}" defer></script>
+    <script src="{{ url_for('static', filename='js/whisper_batch.js') }}"></script>
 </body>
 
 </html>

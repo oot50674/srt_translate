@@ -89,10 +89,10 @@
                                 </div>
 
                                 <div id="whisper-settings" class="space-y-2">
-                                    <label for="whisper-chunk-minutes" class="text-sm font-medium text-slate-700">청크 길이 (분)</label>
+                                    <label for="whisper-chunk-seconds" class="text-sm font-medium text-slate-700">청크 길이 (초)</label>
                                     <div class="flex items-center gap-3">
                                         <!-- Limit the width of the numeric input so the checkbox/label can have sufficient text area -->
-                                        <input type="number" id="whisper-chunk-minutes" name="chunk_minutes" min="1" step="1" value="4" class="flex-none w-16 md:w-20 text-center rounded-lg border border-slate-200 bg-white px-2 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20" style="min-width:4rem; max-width:6rem;">
+                                        <input type="number" id="whisper-chunk-seconds" name="chunk_seconds" min="5" step="5" value="240" class="flex-none w-16 md:w-20 text-center rounded-lg border border-slate-200 bg-white px-2 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20" style="min-width:4rem; max-width:6rem;">
                                         <label class="flex items-center gap-2 text-sm text-slate-700 flex-1 whitespace-normal cursor-pointer select-none">
                                             <input type="checkbox" id="whisper-disable-chunking" name="disable_chunking" value="1" class="h-4 w-4 rounded border-slate-300 text-[#0c77f2] focus:ring-[#0c77f2]">
                                             <span class="max-w-full">청크 분할 사용 안함</span>

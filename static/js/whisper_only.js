@@ -9,13 +9,13 @@
     const submitBtn = document.getElementById('whisper-submit-btn');
     const submitSpinner = document.getElementById('whisper-submit-spinner');
     const submitText = document.getElementById('whisper-submit-text');
-    const chunkMinutesInput = document.getElementById('whisper-chunk-minutes');
+    const chunkSecondsInput = document.getElementById('whisper-chunk-seconds');
     const disableChunkingCheckbox = document.getElementById('whisper-disable-chunking');
     const hallucinationToggle = document.getElementById('whisper-hallucination-toggle');
     const modelInput = document.getElementById('whisper-model-name');
     const selectedFiles = [];
     const youtubeUrls = [];
-    const STORAGE_KEY = 'whisper_chunk_minutes';
+    const STORAGE_KEY = 'whisper_chunk_seconds';
     const DISABLE_STORAGE_KEY = 'whisper_disable_chunking';
     const HALLUCINATION_STORAGE_KEY = 'whisper_apply_hallucination_cleanup';
     const MODEL_STORAGE_KEY = 'whisper_model_name';
@@ -98,23 +98,22 @@
         });
     }
 
-    function loadStoredChunkMinutes() {
-        if (!chunkMinutesInput) return;
+    function loadStoredChunkSeconds() {
+        if (!chunkSecondsInput) return;
         try {
             const storedValue = localStorage.getItem(STORAGE_KEY);
             if (storedValue) {
-                chunkMinutesInput.value = storedValue;
+                chunkSecondsInput.value = storedValue;
             }
             else {
-                // Backwards compatibility: if older key 'whisper_chunk_seconds' exists,
-                // convert to minutes and populate the input.
+                // Backwards compatibility: if older key 'whisper_chunk_minutes' exists, convert to seconds
                 try {
-                    const legacy = localStorage.getItem('whisper_chunk_seconds');
+                    const legacy = localStorage.getItem('whisper_chunk_minutes');
                     if (legacy) {
-                        const secs = parseFloat(legacy);
-                        if (!Number.isNaN(secs) && Number.isFinite(secs) && secs > 0) {
-                            const mins = Math.max(1, Math.round(secs / 60));
-                            chunkMinutesInput.value = String(mins);
+                        const mins = parseFloat(legacy);
+                        if (!Number.isNaN(mins) && Number.isFinite(mins) && mins > 0) {
+                            const secs = Math.max(5, Math.round(mins * 60));
+                            chunkSecondsInput.value = String(secs);
                         }
                     }
                 } catch (e) {
@@ -127,23 +126,23 @@
     }
 
     function loadStoredDisableChunking() {
-        if (!disableChunkingCheckbox || !chunkMinutesInput) return;
+        if (!disableChunkingCheckbox || !chunkSecondsInput) return;
         try {
             const stored = localStorage.getItem(DISABLE_STORAGE_KEY);
             if (stored === '1') {
                 disableChunkingCheckbox.checked = true;
-                chunkMinutesInput.disabled = true;
+                chunkSecondsInput.disabled = true;
             } else {
                 disableChunkingCheckbox.checked = false;
-                chunkMinutesInput.disabled = false;
+                chunkSecondsInput.disabled = false;
             }
         } catch (err) {
             console.warn('청크 비활성화 설정 불러오기 실패', err);
         }
     }
 
-    function persistChunkMinutes(value) {
-        if (!chunkMinutesInput) return;
+    function persistChunkSeconds(value) {
+        if (!chunkSecondsInput) return;
         try {
             if (Number.isFinite(value) && value > 0) {
                 localStorage.setItem(STORAGE_KEY, String(value));
@@ -277,16 +276,16 @@
                 handleNewFiles(fileInput.files);
             }
         });
-        chunkMinutesInput?.addEventListener('input', () => {
-            const val = parseFloat(chunkMinutesInput.value);
+        chunkSecondsInput?.addEventListener('input', () => {
+            const val = parseFloat(chunkSecondsInput.value);
             if (Number.isFinite(val)) {
-                persistChunkMinutes(val);
+                persistChunkSeconds(val);
             }
         });
         disableChunkingCheckbox?.addEventListener('change', () => {
-            if (!chunkMinutesInput) return;
+            if (!chunkSecondsInput) return;
             const disabled = disableChunkingCheckbox.checked;
-            chunkMinutesInput.disabled = disabled;
+            chunkSecondsInput.disabled = disabled;
             // if disabling chunking we don't need to persist chunk value
             persistDisableChunking(disabled);
         });
@@ -341,20 +340,19 @@
             showAlert('파일을 추가하거나 YouTube 링크를 입력해 주세요.');
             return;
         }
-        let chunkMinutesValue = parseFloat(chunkMinutesInput?.value || '4');
-        let chunkSecondsValue = Number.isFinite(chunkMinutesValue) ? chunkMinutesValue * 60 : NaN;
+        let chunkSecondsValue = parseFloat(chunkSecondsInput?.value || '240');
         const disableChunking = disableChunkingCheckbox?.checked === true;
         if (disableChunking) {
             // When disable chunking, set chunkSeconds to 0 so the server will pass through the source file without splitting
             chunkSecondsValue = 0;
         } else {
-            if (!Number.isFinite(chunkMinutesValue) || chunkMinutesValue <= 0) {
-                showAlert('청크 길이는 분 단위 양수로 입력해 주세요.');
-                chunkMinutesInput?.focus();
+            if (!Number.isFinite(chunkSecondsValue) || chunkSecondsValue <= 0) {
+                showAlert('청크 길이는 초 단위 양수로 입력해 주세요.');
+                chunkSecondsInput?.focus();
                 return;
             }
         }
-        persistChunkMinutes(chunkMinutesValue);
+        persistChunkSeconds(chunkSecondsValue);
         const formData = new FormData();
         selectedFiles.forEach(file => {
             formData.append('media_files', file);
@@ -406,7 +404,7 @@
     bindDropZone();
     bindSelectBtn();
     bindYoutubeControls();
-    loadStoredChunkMinutes();
+    loadStoredChunkSeconds();
     loadStoredDisableChunking();
     loadHallucinationPreference();
     loadStoredModelName();

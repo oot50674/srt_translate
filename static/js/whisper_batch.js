@@ -1,28 +1,4 @@
 (() => {
-    const batchId = document.body.dataset.batchId;
-    if (!batchId) return;
-
-    const POLL_INTERVAL = 4000;
-    const RECONNECT_DELAY = 5000;
-    let pollTimer = null;
-    let reconnectTimer = null;
-    let websocket = null;
-    let websocketFailures = 0;
-    let finished = false;
-    let usePollingFallback = !('WebSocket' in window);
-    let ignoreSocketAlerts = false;
-
-    const alertBox = document.getElementById('batch-alert');
-    const statusText = document.getElementById('whisper-batch-status-text');
-    const modelNameEl = document.getElementById('whisper-model-name');
-    const progressBar = document.getElementById('whisper-batch-progress-bar');
-    const progressText = document.getElementById('whisper-batch-progress-text');
-    const totalCountEl = document.getElementById('whisper-total-count');
-    const completeCountEl = document.getElementById('whisper-complete-count');
-    const failedCountEl = document.getElementById('whisper-failed-count');
-    const filesList = document.getElementById('whisper-files-list');
-    const filesPlaceholder = document.getElementById('whisper-files-placeholder');
-
     const STATUS_BADGE = {
         pending: 'bg-slate-100 text-slate-600',
         running: 'bg-blue-100 text-blue-700',
@@ -45,279 +21,318 @@
         failed: '실패',
     };
 
-    function setAlert(message, type = 'error') {
-        if (!alertBox) return;
-        if (!message) {
-            alertBox.classList.add('hidden');
-            alertBox.textContent = '';
+    const registerComponent = () => {
+        if (!window.Alpine || registerComponent.__registered) {
             return;
         }
-        const palette = type === 'error'
-            ? 'text-red-800 bg-red-50 border-red-200'
-            : 'text-emerald-800 bg-emerald-50 border-emerald-200';
-        alertBox.className = `rounded-lg border px-4 py-3 text-sm ${palette}`;
-        alertBox.textContent = message;
-        alertBox.classList.remove('hidden');
-    }
-
-    function formatTime(value) {
-        if (!value && value !== 0) return '-';
-        const date = new Date(value * 1000);
-        return date.toLocaleTimeString();
-    }
-
-    function updateSummary(data) {
-        const overallPercent = Math.round((data.overall_progress || 0) * 100);
-        if (progressBar) {
-            progressBar.style.width = `${overallPercent}%`;
+        registerComponent.__registered = true;
+        Alpine.data('whisperBatchState', (batchId) => ({
+            batchId,
+            alert: null,
+            finished: false,
+            summary: {
+                modelName: '-',
+                totalItems: 0,
+                completedItems: 0,
+                failedItems: 0,
+                overallPercent: 0,
+                statusLabel: '진행 중',
+            },
+            files: [],
+            POLL_INTERVAL: 4000,
+            RECONNECT_DELAY: 5000,
+            pollTimer: null,
+            reconnectTimer: null,
+            websocket: null,
+            websocketFailures: 0,
+            usePollingFallback: !('WebSocket' in window),
+            ignoreSocketAlerts: false,
+            segmentScrollMap: new Map(),
+            boundCleanup: null,
+            init() {
+                if (!this.batchId) {
+                    this.setAlert('배치 ID가 유효하지 않습니다.');
+            return;
         }
-        if (progressText) {
-            progressText.textContent = `${overallPercent}%`;
-        }
-        if (statusText) {
-            let label = '진행 중';
-            if (data.completed_items === data.total_items) {
-                label = '모든 파일을 전사했습니다.';
-            } else if (data.completed_items + data.failed_items === data.total_items) {
-                label = '일부 파일에서 오류가 발생했습니다.';
+                this.boundCleanup = this.cleanup.bind(this);
+                window.addEventListener('beforeunload', this.boundCleanup);
+                if (this.usePollingFallback) {
+                    this.fetchState();
+                } else {
+                    this.connectWebsocket();
+    }
+            },
+            cleanup() {
+                this.disconnectWebsocket();
+                this.stopPolling();
+                if (this.boundCleanup) {
+                    window.removeEventListener('beforeunload', this.boundCleanup);
+                    this.boundCleanup = null;
+                }
+            },
+            setAlert(message, type = 'error') {
+                this.alert = message ? { message, type } : null;
+            },
+            clearAlert() {
+                this.alert = null;
+            },
+            get hasAlert() {
+                return Boolean(this.alert?.message);
+            },
+            get alertClass() {
+                if (this.alert?.type === 'success') {
+                    return 'text-emerald-800 bg-emerald-50 border-emerald-200';
+                }
+                return 'text-red-800 bg-red-50 border-red-200';
+            },
+            get statusLabel() {
+                return this.summary.statusLabel;
+            },
+            get overallPercentText() {
+                return `${this.summary.overallPercent}%`;
+            },
+            get filesEmpty() {
+                return this.files.length === 0;
+            },
+            clampPercent(progress) {
+                const numeric = Number(progress);
+                const value = Number.isFinite(numeric) ? numeric : 0;
+                return Math.max(0, Math.min(100, value * 100));
+            },
+            filePercent(item) {
+                return Math.round(this.clampPercent(item?.progress ?? 0));
+            },
+            segmentPercent(segment) {
+                return this.clampPercent(segment?.progress ?? 0);
+            },
+            segmentPercentText(segment) {
+                return `${this.segmentPercent(segment).toFixed(1)}%`;
+            },
+            segmentProgressWidth(segment) {
+                return `${this.segmentPercent(segment)}%`;
+            },
+            fileSubtitle(item) {
+                const base = item?.message || '';
+                const hasRemovalCount = Number.isFinite(item?.silent_entries_removed);
+                const removalText = hasRemovalCount ? ` / 환각 제거 ${item.silent_entries_removed}개` : '';
+                return `${base}${removalText}`;
+            },
+            hasSegments(item) {
+                return Array.isArray(item?.segment_progress) && item.segment_progress.length > 0;
+            },
+            statusBadgeClass(status) {
+                return STATUS_BADGE[status] || STATUS_BADGE.pending;
+            },
+            segmentBadgeClass(status) {
+                return SEGMENT_STATUS_BADGE[status] || SEGMENT_STATUS_BADGE.pending;
+            },
+            segmentStatusLabel(status) {
+                return SEGMENT_STATUS_LABEL[status] || status || '대기';
+            },
+            cacheSegmentScroll() {
+                if (!this.$refs?.filesList) return;
+                // 세그먼트 리스트의 스크롤 위치를 저장해 새 데이터에서도 위치를 유지한다.
+                this.segmentScrollMap.clear();
+                const cards = this.$refs.filesList.querySelectorAll('.file-card');
+                cards.forEach((card) => {
+                    const fileName = card?.dataset?.fileName;
+            const container = card.querySelector('.segment-list-container');
+            if (fileName && container) {
+                        this.segmentScrollMap.set(fileName, container.scrollTop);
             }
-            statusText.textContent = label;
-        }
-        if (totalCountEl) totalCountEl.textContent = data.total_items ?? 0;
-        if (completeCountEl) completeCountEl.textContent = data.completed_items ?? 0;
-        if (failedCountEl) failedCountEl.textContent = data.failed_items ?? 0;
-        if (modelNameEl) modelNameEl.textContent = data.model_name || 'large-v3';
-    }
-
-    function buildSegmentRows(item) {
-        if (!item.segment_progress?.length) {
-            return '';
-        }
-        const rows = item.segment_progress.map((segment) => {
-            const rawPercent = (segment.progress || 0) * 100;
-            const clampedPercent = Math.max(0, Math.min(100, rawPercent));
-            const percentText = `${clampedPercent.toFixed(1)}%`;
-            const badgeClass = SEGMENT_STATUS_BADGE[segment.status] || SEGMENT_STATUS_BADGE.pending;
-            const label = SEGMENT_STATUS_LABEL[segment.status] || segment.status || '대기';
-            return `
-                <div class="space-y-1 rounded-lg bg-white/70 p-3">
-                    <div class="flex items-center justify-between text-xs text-slate-500">
-                        <span>세그먼트 #${segment.segment_index}</span>
-                        <span class="text-[11px] font-semibold px-2 py-0.5 rounded-full ${badgeClass}">${label}</span>
-                    </div>
-                    <div class="flex items-center justify-between text-[11px] text-slate-400">
-                        <span>${segment.start_timecode || '-'} ~ ${segment.end_timecode || '-'}</span>
-                        <span>${percentText}</span>
-                    </div>
-                    <div class="w-full rounded-full bg-slate-200 h-1.5 overflow-hidden">
-                        <div class="h-full rounded-full bg-slate-500" style="width:${clampedPercent}%;"></div>
-                    </div>
-                    <p class="text-[11px] text-slate-500">${segment.message || ''}</p>
-                </div>
-            `;
-        }).join('');
-        return `
-            <div class="rounded-lg border border-slate-100 bg-slate-50 p-3 space-y-2">
-                <p class="text-xs font-semibold text-slate-500">세그먼트 진행률</p>
-                <div class="space-y-2 max-h-64 overflow-y-auto pr-1">${rows}</div>
-            </div>
-        `;
-    }
-
-    function buildFileCard(item) {
-        const percent = Math.round((item.progress || 0) * 100);
-        const badgeClass = STATUS_BADGE[item.status] || STATUS_BADGE.pending;
-        const downloadBtn = item.transcript_ready
-            ? `<a href="${item.download_url}" class="rounded-md bg-[#0c77f2] text-white text-xs font-semibold px-3 py-2 hover:bg-blue-600 transition-colors">SRT 다운로드</a>`
-            : '';
-        const hasRemovalCount = Number.isFinite(item.silent_entries_removed);
-        const removalText = hasRemovalCount
-            ? ` / 환각 제거 ${item.silent_entries_removed}개`
-            : '';
-        const segmentsMarkup = buildSegmentRows(item);
-        return `
-            <div class="rounded-lg border border-slate-200 p-4 bg-white flex flex-col gap-3">
-                <div class="flex items-center justify-between gap-3">
-                    <div class="flex flex-col">
-                        <p class="text-base font-semibold text-slate-900">${item.file_name}</p>
-                        <p class="text-xs text-slate-500">${(item.message || '') + removalText}</p>
-                    </div>
-                    <span class="text-xs font-semibold px-3 py-1 rounded-full ${badgeClass}">${item.status}</span>
-                </div>
-                <div class="flex items-center justify-between text-xs text-slate-500">
-                    <span>진행률</span>
-                    <span>${percent}%</span>
-                </div>
-                <div class="w-full rounded-full bg-slate-200 h-2 overflow-hidden">
-                    <div class="h-full rounded-full bg-[#0c77f2]" style="width:${percent}%;"></div>
-                </div>
-                ${segmentsMarkup}
-                <div class="flex items-center justify-between">
-                    ${downloadBtn}
-                </div>
-            </div>
-        `;
-    }
-
-    function renderFiles(items) {
-        if (!filesList || !filesPlaceholder) return;
-        if (!items?.length) {
-            filesPlaceholder.classList.remove('hidden');
-            filesList.innerHTML = '';
-            return;
-        }
-        filesPlaceholder.classList.add('hidden');
-        filesList.innerHTML = items.map(buildFileCard).join('');
-    }
-
-
-    function handleData(data) {
-        setAlert('');
-        updateSummary(data);
-        renderFiles(data.items);
-        const total = data.total_items || 0;
-        const finishedCount = (data.completed_items || 0) + (data.failed_items || 0);
+        });
+            },
+            restoreSegmentScroll() {
+                if (!this.$refs?.filesList || this.segmentScrollMap.size === 0) return;
+                // DOM 갱신 이후에 저장된 스크롤 값을 다시 적용한다.
+                this.$nextTick(() => {
+                    const cards = this.$refs.filesList.querySelectorAll('.file-card');
+                    cards.forEach((card) => {
+                        const fileName = card?.dataset?.fileName;
+            const container = card.querySelector('.segment-list-container');
+                        if (fileName && container && this.segmentScrollMap.has(fileName)) {
+                            container.scrollTop = this.segmentScrollMap.get(fileName);
+            }
+        });
+                });
+            },
+            updateSummary(data = {}) {
+                const totalItems = data?.total_items ?? 0;
+                const completedItems = data?.completed_items ?? 0;
+                const failedItems = data?.failed_items ?? 0;
+                const percent = Math.round(this.clampPercent(data?.overall_progress ?? 0));
+                let statusLabel = '진행 중';
+                if (totalItems && completedItems === totalItems) {
+                    statusLabel = '모든 파일을 전사했습니다.';
+                } else if (totalItems && completedItems + failedItems === totalItems) {
+                    statusLabel = '일부 파일에서 오류가 발생했습니다.';
+                }
+                this.summary = {
+                    modelName: data?.model_name || 'large-v3',
+                    totalItems,
+                    completedItems,
+                    failedItems,
+                    overallPercent: percent,
+                    statusLabel,
+                };
+            },
+            updateFiles(items = []) {
+                if (!Array.isArray(items)) {
+                    this.files = [];
+                    return;
+                }
+                this.cacheSegmentScroll();
+                this.files = items.map((file) => ({ ...file }));
+                this.restoreSegmentScroll();
+            },
+            handleData(data) {
+                this.clearAlert();
+                this.updateSummary(data);
+                this.updateFiles(data?.items ?? []);
+                const total = data?.total_items || 0;
+                const finishedCount = (data?.completed_items || 0) + (data?.failed_items || 0);
         if (total && finishedCount >= total) {
-            finished = true;
-            stopPolling();
-            disconnectWebsocket();
+                    this.finished = true;
+                    this.stopPolling();
+                    this.disconnectWebsocket();
         }
-    }
-
-    async function fetchState() {
-        if (!usePollingFallback || finished) {
+            },
+            async fetchState() {
+                if (!this.usePollingFallback || this.finished) {
             return;
         }
         try {
-            const response = await fetch(`/api/whisper/batch/${encodeURIComponent(batchId)}`);
+                    const response = await fetch(`/api/whisper/batch/${encodeURIComponent(this.batchId)}`);
             if (!response.ok) {
                 throw new Error('상태를 불러오지 못했습니다.');
             }
             const payload = await response.json();
-            handleData(payload);
+                    this.handleData(payload);
         } catch (error) {
-            console.error(error);
-            setAlert(error.message || '상태 확인 중 오류가 발생했습니다.');
+                    const message = error?.message || '상태 확인 중 오류가 발생했습니다.';
+                    this.setAlert(message);
         } finally {
-            schedulePoll();
+                    this.schedulePoll();
         }
-    }
-
-    function schedulePoll() {
-        if (!usePollingFallback || finished) {
+            },
+            schedulePoll() {
+                if (!this.usePollingFallback || this.finished) {
             return;
         }
-        if (pollTimer) {
-            clearTimeout(pollTimer);
+                if (this.pollTimer) {
+                    clearTimeout(this.pollTimer);
         }
-        pollTimer = setTimeout(fetchState, POLL_INTERVAL);
-    }
-
-    function stopPolling() {
-        usePollingFallback = false;
-        if (pollTimer) {
-            clearTimeout(pollTimer);
-            pollTimer = null;
+                this.pollTimer = window.setTimeout(() => this.fetchState(), this.POLL_INTERVAL);
+            },
+            stopPolling() {
+                if (this.pollTimer) {
+                    clearTimeout(this.pollTimer);
+                    this.pollTimer = null;
         }
-    }
-
-    function startPollingFallback() {
-        if (usePollingFallback) {
-            if (!pollTimer) {
-                fetchState();
+            },
+            startPollingFallback() {
+                if (this.usePollingFallback) {
+                    if (!this.pollTimer) {
+                        this.fetchState();
             }
             return;
         }
-        usePollingFallback = true;
-        disconnectWebsocket();
-        fetchState();
-    }
-
-    function disconnectWebsocket() {
-        // Suppress transient socket error alerts for intentional disconnects
-        ignoreSocketAlerts = true;
-        if (reconnectTimer) {
-            clearTimeout(reconnectTimer);
-            reconnectTimer = null;
+                this.usePollingFallback = true;
+                this.disconnectWebsocket();
+                this.fetchState();
+            },
+            disconnectWebsocket() {
+                // 의도적인 종료 시에는 경고 토스트를 숨긴다.
+                this.ignoreSocketAlerts = true;
+                if (this.reconnectTimer) {
+                    clearTimeout(this.reconnectTimer);
+                    this.reconnectTimer = null;
         }
-        if (websocket) {
+                if (this.websocket) {
             try {
-                websocket.close();
-            } catch (err) {
-                console.warn(err);
+                        this.websocket.close();
+                    } catch (error) {
+                        console.warn(error);
             }
-            websocket = null;
+                    this.websocket = null;
         }
-    }
-
-    function scheduleReconnect() {
-        if (usePollingFallback || finished || reconnectTimer) {
+            },
+            scheduleReconnect() {
+                if (this.usePollingFallback || this.finished || this.reconnectTimer) {
             return;
         }
-        reconnectTimer = setTimeout(() => {
-            reconnectTimer = null;
-            connectWebsocket();
-        }, RECONNECT_DELAY);
-    }
-
-    function connectWebsocket() {
-        if (usePollingFallback || finished || websocket) {
+                this.reconnectTimer = window.setTimeout(() => {
+                    this.reconnectTimer = null;
+                    this.connectWebsocket();
+                }, this.RECONNECT_DELAY);
+            },
+            connectWebsocket() {
+                if (this.usePollingFallback || this.finished || this.websocket || !this.batchId) {
             return;
         }
         if (!('WebSocket' in window)) {
-            startPollingFallback();
+                    this.startPollingFallback();
             return;
         }
 
         const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-        const socket = new WebSocket(`${protocol}://${window.location.host}/ws/whisper/batch/${encodeURIComponent(batchId)}`);
-        websocket = socket;
+                const socket = new WebSocket(`${protocol}://${window.location.host}/ws/whisper/batch/${encodeURIComponent(this.batchId)}`);
+                this.websocket = socket;
 
         socket.addEventListener('open', () => {
-            websocketFailures = 0;
-            stopPolling();
-            // new connection, re-enable socket alerts
-            ignoreSocketAlerts = false;
+                    this.websocketFailures = 0;
+                    this.usePollingFallback = false;
+                    this.stopPolling();
+                    this.ignoreSocketAlerts = false;
         });
 
         socket.addEventListener('message', (event) => {
             try {
                 const payload = JSON.parse(event.data);
                 if (payload?.type === 'batch_state' && payload.payload) {
-                    handleData(payload.payload);
+                            this.handleData(payload.payload);
                 } else if (payload?.type === 'error') {
-                    setAlert(payload.error || '실시간 업데이트 오류가 발생했습니다.');
+                            this.setAlert(payload.error || '실시간 업데이트 오류가 발생했습니다.');
                 }
-            } catch (err) {
-                console.error(err);
+                    } catch (error) {
+                        console.error(error);
             }
         });
 
         const handleSocketDrop = () => {
-            if (finished) {
+                    if (this.finished) {
                 return;
             }
-            websocket = null;
-            websocketFailures += 1;
-            if (websocketFailures >= 3) {
-                startPollingFallback();
+                    this.websocket = null;
+                    this.websocketFailures += 1;
+                    if (this.websocketFailures >= 3) {
+                        this.startPollingFallback();
             } else {
-                scheduleReconnect();
+                        this.scheduleReconnect();
             }
         };
 
         socket.addEventListener('close', handleSocketDrop);
         socket.addEventListener('error', () => {
-            if (!ignoreSocketAlerts && !finished) {
-                setAlert('실시간 연결이 원활하지 않습니다. 재시도합니다.');
+                    if (!this.ignoreSocketAlerts && !this.finished) {
+                        this.setAlert('실시간 연결이 원활하지 않습니다. 재시도합니다.');
             }
             handleSocketDrop();
         });
-    }
+            },
+        }));
+    };
 
-    if (usePollingFallback) {
-        fetchState();
-    } else {
-        connectWebsocket();
+    const initializeIfLate = () => {
+        if (window.Alpine?.initTree) {
+            window.Alpine.initTree(document.body);
+        }
+    };
+
+    document.addEventListener('alpine:init', registerComponent);
+
+    if (window.Alpine) {
+        registerComponent();
+        initializeIfLate();
     }
 })();
