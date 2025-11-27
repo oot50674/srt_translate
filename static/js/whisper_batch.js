@@ -111,10 +111,7 @@
                 return `${this.segmentPercent(segment)}%`;
             },
             fileSubtitle(item) {
-                const base = item?.message || '';
-                const hasRemovalCount = Number.isFinite(item?.silent_entries_removed);
-                const removalText = hasRemovalCount ? ` / 환각 제거 ${item.silent_entries_removed}개` : '';
-                return `${base}${removalText}`;
+                return item?.message || '';
             },
             hasSegments(item) {
                 return Array.isArray(item?.segment_progress) && item.segment_progress.length > 0;

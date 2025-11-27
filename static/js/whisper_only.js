@@ -11,13 +11,13 @@
     const submitText = document.getElementById('whisper-submit-text');
     const chunkSecondsInput = document.getElementById('whisper-chunk-seconds');
     const disableChunkingCheckbox = document.getElementById('whisper-disable-chunking');
-    const hallucinationToggle = document.getElementById('whisper-hallucination-toggle');
+    const utteranceToggle = document.getElementById('whisper-utterance-toggle');
     const modelInput = document.getElementById('whisper-model-name');
     const selectedFiles = [];
     const youtubeUrls = [];
     const STORAGE_KEY = 'whisper_chunk_seconds';
     const DISABLE_STORAGE_KEY = 'whisper_disable_chunking';
-    const HALLUCINATION_STORAGE_KEY = 'whisper_apply_hallucination_cleanup';
+    const UTTERANCE_STORAGE_KEY = 'whisper_utterance_segmentation';
     const MODEL_STORAGE_KEY = 'whisper_model_name';
 
     function showAlert(message, type = 'error') {
@@ -126,16 +126,10 @@
     }
 
     function loadStoredDisableChunking() {
-        if (!disableChunkingCheckbox || !chunkSecondsInput) return;
+        if (!disableChunkingCheckbox) return;
         try {
             const stored = localStorage.getItem(DISABLE_STORAGE_KEY);
-            if (stored === '1') {
-                disableChunkingCheckbox.checked = true;
-                chunkSecondsInput.disabled = true;
-            } else {
-                disableChunkingCheckbox.checked = false;
-                chunkSecondsInput.disabled = false;
-            }
+            disableChunkingCheckbox.checked = stored === '1';
         } catch (err) {
             console.warn('청크 비활성화 설정 불러오기 실패', err);
         }
@@ -167,26 +161,39 @@
         }
     }
 
-    function loadHallucinationPreference() {
-        if (!hallucinationToggle) return;
+    function loadStoredUtteranceSegmentation() {
+        if (!utteranceToggle) return;
         try {
-            const stored = localStorage.getItem(HALLUCINATION_STORAGE_KEY);
-            if (stored === '0') {
-                hallucinationToggle.checked = false;
-            } else if (stored === '1') {
-                hallucinationToggle.checked = true;
+            const stored = localStorage.getItem(UTTERANCE_STORAGE_KEY);
+            if (stored === '1') {
+                utteranceToggle.checked = true;
+            } else if (stored === '0') {
+                utteranceToggle.checked = false;
             }
         } catch (err) {
-            console.warn('환각 제거 설정을 불러오지 못했습니다.', err);
+            console.warn('발화 단위 전사 설정을 불러오지 못했습니다.', err);
         }
     }
 
-    function persistHallucinationPreference(value) {
-        if (!hallucinationToggle) return;
+    function persistUtteranceSegmentation(enabled) {
+        if (!utteranceToggle) return;
         try {
-            localStorage.setItem(HALLUCINATION_STORAGE_KEY, value ? '1' : '0');
+            localStorage.setItem(UTTERANCE_STORAGE_KEY, enabled ? '1' : '0');
         } catch (err) {
-            console.warn('환각 제거 설정을 저장하지 못했습니다.', err);
+            console.warn('발화 단위 전사 설정을 저장하지 못했습니다.', err);
+        }
+    }
+
+    function syncSegmentationControls() {
+        const useUtterance = utteranceToggle?.checked === true;
+        const disableChunking = disableChunkingCheckbox?.checked === true;
+
+        if (disableChunkingCheckbox) {
+            disableChunkingCheckbox.disabled = false;
+        }
+
+        if (chunkSecondsInput) {
+            chunkSecondsInput.disabled = useUtterance || disableChunking;
         }
     }
 
@@ -283,11 +290,26 @@
             }
         });
         disableChunkingCheckbox?.addEventListener('change', () => {
-            if (!chunkSecondsInput) return;
             const disabled = disableChunkingCheckbox.checked;
-            chunkSecondsInput.disabled = disabled;
-            // if disabling chunking we don't need to persist chunk value
             persistDisableChunking(disabled);
+            if (disabled) {
+                utteranceToggle && persistUtteranceSegmentation(false);
+                if (utteranceToggle) {
+                    utteranceToggle.checked = false;
+                }
+            }
+            syncSegmentationControls();
+        });
+        utteranceToggle?.addEventListener('change', () => {
+            const enabled = utteranceToggle.checked;
+            persistUtteranceSegmentation(enabled);
+            if (enabled) {
+                disableChunkingCheckbox && persistDisableChunking(false);
+                if (disableChunkingCheckbox) {
+                    disableChunkingCheckbox.checked = false;
+                }
+            }
+            syncSegmentationControls();
         });
     }
 
@@ -340,13 +362,17 @@
             showAlert('파일을 추가하거나 YouTube 링크를 입력해 주세요.');
             return;
         }
+        const useUtterance = utteranceToggle?.checked === true;
         let chunkSecondsValue = parseFloat(chunkSecondsInput?.value || '240');
+        if (!Number.isFinite(chunkSecondsValue)) {
+            chunkSecondsValue = 240;
+        }
         const disableChunking = disableChunkingCheckbox?.checked === true;
-        if (disableChunking) {
-            // When disable chunking, set chunkSeconds to 0 so the server will pass through the source file without splitting
-            chunkSecondsValue = 0;
-        } else {
-            if (!Number.isFinite(chunkSecondsValue) || chunkSecondsValue <= 0) {
+        if (!useUtterance) {
+            if (disableChunking) {
+                // When disabling chunking, set chunkSeconds to 0 so the server will pass through the source file without splitting
+                chunkSecondsValue = 0;
+            } else if (chunkSecondsValue <= 0) {
                 showAlert('청크 길이는 초 단위 양수로 입력해 주세요.');
                 chunkSecondsInput?.focus();
                 return;
@@ -361,13 +387,14 @@
             formData.append('youtube_urls', url);
         });
         formData.append('chunk_seconds', String(chunkSecondsValue));
-        if (disableChunking) {
+        if (disableChunking && !useUtterance) {
             formData.append('disable_chunking', '1');
         }
-        const applyHallucinationCleanup = hallucinationToggle ? hallucinationToggle.checked : true;
-        formData.append('apply_hallucination_cleanup', applyHallucinationCleanup ? '1' : '0');
-        if (hallucinationToggle) {
-            persistHallucinationPreference(applyHallucinationCleanup);
+        if (useUtterance) {
+            formData.append('utterance_segmentation', '1');
+            persistUtteranceSegmentation(true);
+        } else {
+            persistUtteranceSegmentation(false);
         }
         const modelName = (modelInput?.value || '').trim();
         if (modelName) {
@@ -406,11 +433,9 @@
     bindYoutubeControls();
     loadStoredChunkSeconds();
     loadStoredDisableChunking();
-    loadHallucinationPreference();
+    loadStoredUtteranceSegmentation();
     loadStoredModelName();
-    hallucinationToggle?.addEventListener('change', () => {
-        persistHallucinationPreference(hallucinationToggle.checked);
-    });
+    syncSegmentationControls();
     modelInput?.addEventListener('change', () => {
         const value = (modelInput.value || '').trim();
         persistModelName(value);

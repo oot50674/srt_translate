@@ -32,6 +32,10 @@ $(function () {
     const $contextLimitInput = $('#context-limit');
     const $rpmLimitInput = $('#rpm-limit');
     const $youtubeUrlInput = $('#youtube-url');
+    const $videoFileInput = $('#video-file-input');
+    const $videoFileStatus = $('#video-file-status');
+    const $videoDropZone = $('#video-context-drop');
+    const ALLOWED_VIDEO_EXTS = ['.mp4', '.mov', '.mkv', '.avi', '.webm', '.m4v'];
     const SETTINGS_PANEL_STORAGE_KEY = 'settingsPanelOpen';
     const LAST_PRESET_COOKIE_KEY = 'lastUsedPreset';
     const $configSaveIndicator = $('#config-save-indicator');
@@ -59,6 +63,52 @@ $(function () {
 
     function deleteCookie(name) {
         document.cookie = name + '=;expires=Thu, 01 Jan 1970 00:00:01 GMT;path=/';
+    }
+
+    function setVideoFileStatus(message) {
+        if ($videoFileStatus.length) {
+            $videoFileStatus.text(message);
+        }
+    }
+
+    function resetVideoSelection() {
+        if ($videoFileInput.length) {
+            $videoFileInput.val('');
+        }
+        setVideoFileStatus('선택된 파일 없음. 드롭하거나 링크를 입력하세요.');
+    }
+
+    function isAllowedVideoFile(file) {
+        if (!file) return false;
+        if (file.type && file.type.startsWith('video/')) return true;
+        const name = file.name || '';
+        const lower = name.toLowerCase();
+        return ALLOWED_VIDEO_EXTS.some(ext => lower.endsWith(ext));
+    }
+
+    function rejectVideoSelection(message) {
+        if ($videoFileInput.length) {
+            $videoFileInput.val('');
+        }
+        setVideoFileStatus(message);
+    }
+
+    function applyDropHighlight(active) {
+        if (!$videoDropZone.length) return;
+        $videoDropZone.toggleClass('ring-2 ring-[#0c77f2]/50 bg-blue-50/30', !!active);
+    }
+
+    function setVideoFile(file) {
+        if (!$videoFileInput.length || !file) return;
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        $videoFileInput[0].files = dt.files;
+        const sizeMB = file.size ? (file.size / (1024 * 1024)).toFixed(1) : null;
+        const label = sizeMB ? `${file.name} (${sizeMB} MB)` : file.name;
+        setVideoFileStatus(label || '영상 파일이 선택되었습니다.');
+        if ($youtubeUrlInput.length) {
+            $youtubeUrlInput.val('');
+        }
     }
 
     if ($modelInput.length) {
@@ -129,6 +179,69 @@ $(function () {
             }
         });
     }
+
+    if ($videoFileInput.length) {
+        $videoFileInput.on('change', function () {
+            const file = this.files && this.files[0];
+            if (file) {
+                if (!isAllowedVideoFile(file)) {
+                    rejectVideoSelection('지원하지 않는 영상 형식입니다.');
+                    return;
+                }
+                setVideoFile(file);
+            } else {
+                resetVideoSelection();
+            }
+        });
+    }
+
+    if ($videoDropZone.length && $videoFileInput.length) {
+        const prevent = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+        };
+
+        $videoDropZone.on('dragenter dragover', function (e) {
+            prevent(e);
+            applyDropHighlight(true);
+        });
+
+        $videoDropZone.on('dragleave dragend', function (e) {
+            prevent(e);
+            applyDropHighlight(false);
+        });
+
+        $videoDropZone.on('drop', function (e) {
+            prevent(e);
+            applyDropHighlight(false);
+            const files = e.originalEvent && e.originalEvent.dataTransfer ? e.originalEvent.dataTransfer.files : null;
+            if (!files || !files.length) return;
+            const file = files[0];
+            if (!isAllowedVideoFile(file)) {
+                rejectVideoSelection('지원하지 않는 영상 형식입니다.');
+                return;
+            }
+            setVideoFile(file);
+        });
+
+        $videoDropZone.on('click', function (e) {
+            // 입력창 포커스를 방해하지 않으면서 파일 선택 유도
+            const isUrlInput = $(e.target).is('#youtube-url');
+            if (!isUrlInput) {
+                $videoFileInput.trigger('click');
+            }
+        });
+    }
+
+    if ($youtubeUrlInput.length) {
+        $youtubeUrlInput.on('input', function () {
+            const val = $(this).val().trim();
+            if (val && $videoFileInput.length && $videoFileInput[0].files.length) {
+                resetVideoSelection();
+            }
+        });
+    }
+    resetVideoSelection();
 
     // ---------------- Config (추가 설정) 관리 ----------------
     // 프리셋과 완전히 독립. 서버의 /api/config 엔드포인트와 동기화.
@@ -655,13 +768,14 @@ $(function () {
                 thinking_budget_str = $thinkingBudgetInput.val() || '';
             }
 
+            const hasVideoFile = $videoFileInput.length && $videoFileInput[0].files.length > 0;
             // 번역 옵션 객체 생성
             const options = {
                 target_lang: $targetLangInput.val() || '',
                 batch_size: $chunkSizeInput.val() || '',
                 custom_prompt: $customPromptInput.val() || '',
                 thinking_budget: thinking_budget_str,
-                youtube_url: $youtubeUrlInput.length ? ($youtubeUrlInput.val() || '').trim() : '',
+                youtube_url: hasVideoFile ? '' : ($youtubeUrlInput.length ? ($youtubeUrlInput.val() || '').trim() : ''),
                 // Context compression 옵션
                 context_compression: $contextCompressionCheckbox.length ? ($contextCompressionCheckbox.is(':checked') ? '1' : '0') : '0',
                 context_limit: $contextLimitInput.length ? $contextLimitInput.val() || '' : '',
@@ -692,6 +806,9 @@ $(function () {
             formData.append('context_limit', options.context_limit);
             formData.append('api_key', options.api_key);
             formData.append('model', options.model || DEFAULT_MODEL);
+            if (hasVideoFile) {
+                formData.append('video_file', $videoFileInput[0].files[0]);
+            }
 
             // API 호출로 작업 생성
             const res = await fetch('/api/jobs', {

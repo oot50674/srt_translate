@@ -36,18 +36,18 @@
             </header>
 
             <main id="page-main" class="px-4 md:px-10 lg:px-20 py-10">
-                <section id="whisper-upload-section" class="max-w-4xl mx-auto w-full">
-                    <article id="whisper-upload-article" class="w-full py-8 bg-white shadow-xl rounded-xl px-6 md:px-10 flex flex-col gap-6">
-                        <header id="upload-header" class="space-y-2">
-                            <h1 class="text-2xl font-semibold text-slate-900">Whisper 전용 전사</h1>
+                <section id="whisper-upload-section" class="max-w-5xl mx-auto w-full">
+                    <article id="whisper-upload-article" class="w-full py-6 bg-white shadow-lg rounded-lg px-6 md:px-8 flex flex-col gap-6">
+                        <header id="upload-header" class="space-y-1">
+                            <h1 class="text-xl font-semibold text-slate-900">Whisper 전용 전사</h1>
                             <p class="text-sm text-slate-600">LLM 없이 Whisper 전사만 빠르게 실행합니다. 여러 영상 또는 오디오 파일을 한 번에 업로드할 수 있습니다.</p>
                         </header>
 
 
-                        <form id="whisper-upload-form" class="space-y-6" enctype="multipart/form-data">
+                        <form id="whisper-upload-form" class="space-y-5" enctype="multipart/form-data">
                             <div id="whisper-youtube-block" class="space-y-3">
                                 <label for="whisper-youtube-input" class="text-sm font-medium text-slate-700">YouTube 링크</label>
-                                <div class="flex flex-col gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-4">
+                                <div class="flex flex-col gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
                                     <div class="flex flex-col gap-2 md:flex-row">
                                         <input type="url" id="whisper-youtube-input" name="youtube_url" placeholder="https://www.youtube.com/watch?v=..." class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20">
                                         <button id="whisper-youtube-add-btn" type="button" class="mt-2 md:mt-0 md:ml-3 flex items-center justify-center whitespace-nowrap rounded-md bg-[#0c77f2] px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-600">
@@ -61,54 +61,49 @@
 
                             <div id="whisper-file-block" class="space-y-3">
                                 <label for="whisper-file-input" class="text-sm font-medium text-slate-700">영상/오디오 파일</label>
-                                <div id="whisper-drop-zone" class="flex flex-col items-center justify-center gap-4 rounded-lg border-2 border-dashed border-slate-300 px-6 py-10 text-center bg-slate-50 hover:border-slate-400 transition-colors cursor-pointer">
-                                    <span class="material-icons text-4xl text-slate-500">upload_file</span>
-                                    <p class="text-slate-700 text-base font-medium leading-tight">파일을 이곳에 드래그하거나 선택하세요</p>
-                                    <p class="text-slate-500 text-sm">MP4, MOV, MKV, MP3, WAV 등의 형식을 지원합니다.</p>
+                                <div id="whisper-drop-zone" class="flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-slate-300 px-5 py-8 text-center bg-slate-50 hover:border-slate-400 transition-colors cursor-pointer">
+                                    <span class="material-icons text-3xl text-slate-500">upload_file</span>
+                                    <p class="text-slate-700 text-sm font-medium leading-tight">파일을 이곳에 드래그하거나 선택하세요</p>
+                                    <p class="text-slate-500 text-xs">MP4, MOV, MKV, MP3, WAV 등의 형식을 지원합니다.</p>
                                     <input type="file" id="whisper-file-input" name="media_files" multiple accept="audio/*,video/*" class="hidden">
-                                    <button id="whisper-select-btn" type="button" class="flex items-center gap-2 rounded-md border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 transition-colors">
+                                    <button id="whisper-select-btn" type="button" class="flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 transition-colors">
                                         파일 선택
                                     </button>
                                 </div>
-                                <div id="whisper-file-list" class="hidden flex flex-col gap-2 rounded-lg border border-slate-100 bg-slate-50 p-4"></div>
+                                <div id="whisper-file-list" class="hidden flex flex-col gap-2 rounded-lg border border-slate-100 bg-slate-50 p-3"></div>
                             </div>
 
-                            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                <div id="whisper-model-block" class="space-y-2">
-                                    <label for="whisper-model-name" class="text-sm font-medium text-slate-700">Whisper 모델</label>
-                                    <input type="text" id="whisper-model-name" name="model_name" list="whisper-model-presets" placeholder="예: Large-v3" value="Large-v3" class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20" autocomplete="off">
-                                    <datalist id="whisper-model-presets">
-                                        <option value="Tiny"></option>
-                                        <option value="Base"></option>
-                                        <option value="Small"></option>
-                                        <option value="Medium"></option>
-                                        <option value="Large-v3"></option>
-                                        <option value="Large-v3-turbo"></option>
-                                    </datalist>
-                                    <p class="text-xs text-slate-500">지원되는 모델 이름을 입력하면 Whisper가 해당 가중치로 전사합니다.</p>
-                                </div>
-
-                                <div id="whisper-settings" class="space-y-2">
-                                    <label for="whisper-chunk-seconds" class="text-sm font-medium text-slate-700">청크 길이 (초)</label>
-                                    <div class="flex items-center gap-3">
-                                        <!-- Limit the width of the numeric input so the checkbox/label can have sufficient text area -->
-                                        <input type="number" id="whisper-chunk-seconds" name="chunk_seconds" min="5" step="5" value="240" class="flex-none w-16 md:w-20 text-center rounded-lg border border-slate-200 bg-white px-2 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20" style="min-width:4rem; max-width:6rem;">
-                                        <label class="flex items-center gap-2 text-sm text-slate-700 flex-1 whitespace-normal cursor-pointer select-none">
-                                            <input type="checkbox" id="whisper-disable-chunking" name="disable_chunking" value="1" class="h-4 w-4 rounded border-slate-300 text-[#0c77f2] focus:ring-[#0c77f2]">
-                                            <span class="max-w-full">청크 분할 사용 안함</span>
-                                        </label>
+                            <div id="whisper-control-panel" class="space-y-4">
+                                <h2 id="whisper-control-header" class="text-sm font-semibold text-slate-800">전사 설정</h2>
+                                <div id="whisper-settings" class="space-y-4">
+                                    <div id="whisper-settings-row-1" class="flex flex-wrap items-center gap-x-8 gap-y-3 pb-3 border-b border-slate-200">
+                                        <div class="flex items-center gap-3">
+                                            <label for="whisper-model-name" class="text-sm text-slate-600">모델</label>
+                                            <input type="text" id="whisper-model-name" name="model_name" list="whisper-model-presets" placeholder="Large-v3" value="Large-v3" class="w-40 rounded border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none" autocomplete="off">
+                                            <datalist id="whisper-model-presets">
+                                                <option value="Tiny"></option>
+                                                <option value="Base"></option>
+                                                <option value="Small"></option>
+                                                <option value="Medium"></option>
+                                                <option value="Large-v3"></option>
+                                                <option value="Large-v3-turbo"></option>
+                                            </datalist>
+                                        </div>
                                     </div>
-                                    <p class="text-xs text-slate-500">비활성화하면 소스 파일을 분할하지 않고 원본 파일 전체를 그대로 전사합니다.</p>
-                                </div>
-                            </div>
-
-                            <div id="whisper-hallucination-block" class="space-y-3">
-                                <label for="whisper-hallucination-toggle" class="text-sm font-medium text-slate-700">반복 환각 제거</label>
-                                <div id="whisper-hallucination-inner" class="flex items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
-                                    <input type="checkbox" id="whisper-hallucination-toggle" name="apply_hallucination_cleanup" class="h-5 w-5 mt-0.5 rounded border-slate-300 text-[#0c77f2] focus:ring-[#0c77f2]" checked>
-                                    <div id="whisper-hallucination-copy" class="flex flex-col gap-1">
-                                        <p class="text-sm font-semibold text-slate-800">Whisper가 반복하는 환각 자막을 정리합니다.</p>
-                                        <p class="text-xs text-slate-500">비정상 자막을 재전사하여 중요한 문장은 유지하면서 노이즈를 줄입니다.</p>
+                                    <div id="whisper-settings-row-2" class="flex flex-wrap items-center gap-x-6 gap-y-3">
+                                        <label class="flex items-center gap-2 rounded bg-slate-100 px-3 h-10">
+                                            <span class="text-sm text-slate-700">청크</span>
+                                            <input type="number" id="whisper-chunk-seconds" name="chunk_seconds" min="5" step="5" value="240" class="w-16 rounded border border-slate-300 bg-white px-2 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none h-7 disabled:bg-slate-200 disabled:opacity-70 disabled:cursor-not-allowed">
+                                            <span class="text-sm text-slate-500">초</span>
+                                        </label>
+                                        <label for="whisper-disable-chunking" class="flex items-center gap-2 cursor-pointer select-none rounded bg-slate-100 px-3 h-10">
+                                            <input type="checkbox" id="whisper-disable-chunking" name="disable_chunking" value="1" class="h-4 w-4 rounded border-slate-300 text-[#0c77f2] focus:ring-[#0c77f2]">
+                                            <span class="text-sm text-slate-700">청크 분할 안함</span>
+                                        </label>
+                                        <label id="whisper-utterance-option" for="whisper-utterance-toggle" class="flex items-center gap-2 cursor-pointer select-none rounded bg-slate-100 px-3 h-10">
+                                            <input type="checkbox" id="whisper-utterance-toggle" name="utterance_segmentation" value="1" class="h-4 w-4 rounded border-slate-300 text-[#0c77f2] focus:ring-[#0c77f2]">
+                                            <span class="text-sm text-slate-700">발화 단위 전사</span>
+                                        </label>
                                     </div>
                                 </div>
                             </div>

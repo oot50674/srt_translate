@@ -9,6 +9,7 @@ from flask import Flask, render_template, request, jsonify, Response, send_file,
 from flask_sock import Sock
 from simple_websocket import ConnectionClosed
 from dotenv import load_dotenv
+from werkzeug.utils import secure_filename
 from module import srt_module, ffmpeg_module
 from module.gemini_module import GeminiClientOptions
 from module.subtitle_generation import (
@@ -98,7 +99,68 @@ def _cleanup_temp_paths(temp_paths: List[Tuple[str, str]]) -> None:
             logger.warning("임시 SRT 파일 삭제 실패: %s (%s)", path, exc)
 
 
-def _build_video_context(youtube_url: str) -> Optional[Dict[str, Any]]:
+ALLOWED_VIDEO_EXTENSIONS = {'.mp4', '.mov', '.mkv', '.avi', '.webm', '.m4v'}
+DOWNLOAD_VIDEO_DIR = os.path.join(BASE_DIR, 'download_video')
+
+
+def _cleanup_video_file(path: str) -> None:
+    """다운로드/업로드된 임시 영상 파일을 정리합니다."""
+    if not path:
+        return
+    try:
+        abs_path = os.path.abspath(path)
+        safe_root = os.path.abspath(DOWNLOAD_VIDEO_DIR)
+        if os.path.commonpath([abs_path, safe_root]) != safe_root:
+            logger.warning("임시 폴더 외부 경로는 삭제하지 않음: %s", abs_path)
+            return
+        os.remove(abs_path)
+        logger.info("임시 영상 삭제: %s", abs_path)
+    except FileNotFoundError:
+        return
+    except Exception as exc:
+        logger.warning("임시 영상 삭제 실패: %s (%s)", path, exc)
+
+
+def _save_uploaded_video(file_storage, job_id: str) -> Dict[str, str]:
+    """자막 번역 컨텍스트용 업로드 영상을 저장하고 경로 정보를 반환합니다."""
+    filename = secure_filename(file_storage.filename or '')
+    _, ext = os.path.splitext(filename)
+    ext = ext.lower()
+    if ext and ext not in ALLOWED_VIDEO_EXTENSIONS:
+        raise ValueError("지원하지 않는 영상 파일 형식입니다.")
+
+    os.makedirs(DOWNLOAD_VIDEO_DIR, exist_ok=True)
+    dest_name = f"{job_id}_context{ext or '.mp4'}"
+    dest_path = os.path.join(DOWNLOAD_VIDEO_DIR, dest_name)
+    file_storage.save(dest_path)
+    return {
+        'path': dest_path,
+        'original_name': filename or file_storage.filename,
+    }
+
+
+def _build_video_context(
+    youtube_url: str,
+    uploaded_video_path: Optional[str] = None,
+    uploaded_video_name: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    video_path = (uploaded_video_path or '').strip()
+    if video_path:
+        if not os.path.exists(video_path):
+            logger.warning("업로드 영상 경로가 존재하지 않습니다: %s", video_path)
+            return None
+        try:
+            duration_seconds = ffmpeg_module.get_duration_seconds(video_path)
+        except Exception as exc:
+            logger.error("업로드 영상 길이 확인 실패: %s", exc)
+            return None
+        return {
+            'video_path': video_path,
+            'stream_url': video_path,
+            'duration': duration_seconds,
+            'source_label': uploaded_video_name or os.path.basename(video_path),
+        }
+
     url = (youtube_url or '').strip()
     if not url:
         return None
@@ -112,6 +174,7 @@ def _build_video_context(youtube_url: str) -> Optional[Dict[str, Any]]:
         'youtube_url': url,
         'stream_url': stream_url,
         'duration': duration_seconds,
+        'source_label': url,
     }
 
 
@@ -353,22 +416,34 @@ def api_create_whisper_batch():
         youtube_urls.append(single_url)
     chunk_seconds_raw = request.form.get('chunk_seconds') or 30
     disable_chunking_raw = (request.form.get('disable_chunking') or '0').strip().lower()
-    hallucination_cleanup_raw = (request.form.get('apply_hallucination_cleanup') or '1').strip().lower()
-    apply_hallucination_cleanup = hallucination_cleanup_raw not in {'0', 'false', 'off'}
+    utterance_segmentation_raw = (
+        request.form.get('utterance_segmentation')
+        or request.form.get('segment_by_utterance')
+        or '0'
+    ).strip().lower()
     model_name = (request.form.get('model_name') or '').strip()
     try:
         chunk_seconds = float(chunk_seconds_raw)
     except (TypeError, ValueError):
         chunk_seconds = 30.0
-    if disable_chunking_raw in {'1', 'true', 'on'}:
+    segment_by_utterance = utterance_segmentation_raw in {'1', 'true', 'on', 'yes', 'utterance'}
+    disable_chunking = disable_chunking_raw in {'1', 'true', 'on'}
+    segmentation_mode = 'chunk'
+    if segment_by_utterance:
+        segmentation_mode = 'utterance'
+    elif disable_chunking:
+        segmentation_mode = 'full_file'
+        chunk_seconds = 0.0
+    elif chunk_seconds <= 0:
+        segmentation_mode = 'full_file'
         chunk_seconds = 0.0
     try:
         batch = create_whisper_batch(
             files=files,
             chunk_seconds=chunk_seconds,
             youtube_urls=youtube_urls,
-            apply_hallucination_cleanup=apply_hallucination_cleanup,
             model_name=model_name or None,
+            segmentation_mode=segmentation_mode,
         )
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400
@@ -442,7 +517,7 @@ def api_create_job():
     """업로드된 SRT 데이터와 옵션을 임시로 저장하고 작업 ID를 반환합니다."""
     # 새로운 작업을 추가하기 전에 오래된 작업(30일 경과)을 정리합니다.
     delete_old_jobs()
-    
+
     # SRT 파일 데이터 수집: 업로드된 파일 또는 폼 텍스트를 리스트로 저장
     files_data = []
     # 업로드된 파일들 처리 (다중 파일 지원)
@@ -465,6 +540,17 @@ def api_create_job():
 
     # 고유 작업 ID 생성
     job_id = str(uuid.uuid4())
+    video_info: Optional[Dict[str, str]] = None
+    uploaded_video = request.files.get('video_file')
+    if uploaded_video and uploaded_video.filename:
+        try:
+            video_info = _save_uploaded_video(uploaded_video, job_id)
+            logger.info("업로드 영상 저장 완료: %s", video_info.get('path'))
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
+        except Exception as exc:
+            logger.exception("업로드 영상 저장 실패: %s", exc)
+            return jsonify({'error': '영상 업로드에 실패했습니다.'}), 500
     # 배치 크기 파라미터 처리 (기본값 10)
     batch_size = _safe_int(request.form.get('batch_size', 10), 10, field_name='batch_size')
     # Thinking Budget 파라미터 처리 (기본값 0)
@@ -482,6 +568,8 @@ def api_create_job():
     # 모델 이름 처리 (기본값 DEFAULT_MODEL)
     model_name = (request.form.get('model') or '').strip() or DEFAULT_MODEL
     youtube_url = (request.form.get('youtube_url') or '').strip()
+    if video_info:
+        youtube_url = ''
     # 작업 데이터 구성
     job_data = {
         'files': files_data,
@@ -493,6 +581,8 @@ def api_create_job():
         'context_limit': context_limit,
         'model': model_name,
         'youtube_url': youtube_url,
+        'video_path': video_info.get('path') if video_info else None,
+        'video_name': video_info.get('original_name') if video_info else None,
     }
     # 작업 데이터를 DB에 저장
     save_job(job_id, job_data) # type: ignore
@@ -504,7 +594,11 @@ def api_get_job(job_id):
     job = get_job(job_id)
     if not job:
         return jsonify({'error': 'not found'}), 404
-    return jsonify(job)
+    sanitized = dict(job)
+    if 'video_path' in sanitized:
+        sanitized['has_video_context'] = bool(sanitized.get('video_path'))
+        sanitized.pop('video_path', None)
+    return jsonify(sanitized)
 
 @app.route('/api/jobs/<job_id>', methods=['DELETE'])
 def api_delete_job(job_id):
@@ -551,6 +645,15 @@ def upload_srt():
     raw_context_compression = (request.form.get('context_compression') or '').strip()
     context_compression_enabled = raw_context_compression in {'1', 'true', 'True', 'on'}
     context_limit = _parse_optional_int(request.form.get('context_limit'), field_name='context_limit')
+    job_video_path: Optional[str] = None
+    job_video_name: Optional[str] = None
+    if job_id:
+        stored_job = get_job(job_id)
+        if stored_job:
+            job_video_path = stored_job.get('video_path') or None
+            job_video_name = stored_job.get('video_name') or None
+            if not youtube_url:
+                youtube_url = (stored_job.get('youtube_url') or '').strip()
     # 사용자가 업로드 단계에서 키를 다시 보냈다면 .env에 저장/반영
     if api_key:
         save_api_key_to_env(api_key)
@@ -590,11 +693,14 @@ def upload_srt():
     
     logger.info("다중 파일 처리를 위한 공유 클라이언트가 생성되었습니다.")
 
-    video_context = _build_video_context(youtube_url)
-    if video_context:
+    cleanup_video_path: Optional[str] = job_video_path
+    video_context = _build_video_context(youtube_url, job_video_path, job_video_name)
+    if video_context and video_context.get('video_path'):
+        cleanup_video_path = video_context.get('video_path')
         logger.info(
-            "유튜브 영상 컨텍스트 준비 완료: duration=%.2fs",
+            "영상 컨텍스트 준비 완료: duration=%.2fs, label=%s",
             video_context.get('duration', 0.0),
+            video_context.get('source_label') or video_context.get('youtube_url') or job_video_name,
         )
 
     def generate():
@@ -643,6 +749,8 @@ def upload_srt():
             stop_flag['stopped'] = True
         finally:
             _cleanup_temp_paths(temp_paths)
+            if cleanup_video_path:
+                _cleanup_video_file(cleanup_video_path)
 
     return Response(generate(), mimetype='text/plain')
 

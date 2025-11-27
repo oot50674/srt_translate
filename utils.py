@@ -13,6 +13,7 @@ from module import ffmpeg_module
 from module.gemini_module import GeminiClient, sanitize_history_messages
 
 logger = logging.getLogger(__name__)
+DOWNLOAD_VIDEO_DIR = os.path.join(BASE_DIR, 'download_video')
 
 def _srt_timestamp_to_seconds(value: str) -> float:
     """SRT 타임스탬프(HH:MM:SS,mmm)를 초 단위 float로 변환합니다."""
@@ -167,6 +168,25 @@ def cleanup_old_files(days: int = 3) -> None:
             # SNAPSHOT_ROOT_DIR가 정의되어 있지 않으면 무시
             pass
 
+        # 업로드/다운로드된 임시 영상 정리
+        try:
+            video_root = DOWNLOAD_VIDEO_DIR
+            if os.path.isdir(video_root):
+                for entry in os.listdir(video_root):
+                    path = os.path.join(video_root, entry)
+                    try:
+                        mtime = os.path.getmtime(path)
+                        if mtime < cutoff_ts:
+                            if os.path.isdir(path):
+                                shutil.rmtree(path)
+                            else:
+                                os.remove(path)
+                            logger.info("오래된 업로드 영상 삭제: %s", path)
+                    except Exception as exc:
+                        logger.exception("오래된 업로드 영상 삭제 실패: %s (%s)", path, exc)
+        except NameError:
+            pass
+
         # 히스토리 로그 파일 정리
         try:
             logs_root = HISTORY_LOG_DIR
@@ -278,7 +298,11 @@ def translate_srt_stream(content: str, client, target_lang: str = '한국어', b
             video_duration = float(duration_value) if duration_value is not None else None
         except (TypeError, ValueError):
             video_duration = None
-        video_label = video_context.get('youtube_url')
+        video_label = (
+            video_context.get('source_label')
+            or video_context.get('youtube_url')
+            or video_context.get('video_path')
+        )
     chunk_counter = 0
     snapshot_session_dir: Optional[str] = None
     if video_stream_url and video_duration:
@@ -316,10 +340,11 @@ def translate_srt_stream(content: str, client, target_lang: str = '한국어', b
                     chunk_counter,
                     snapshot_session_dir,
                 )
+                source_display = video_label or '영상'
                 analysis_prompt = (
-                    f"다음 이미지는 유튜브 영상 청크 #{chunk_counter}"
+                    f"다음 이미지는 영상 청크 #{chunk_counter}"
                     f" (엔트리 {entry_count}개)"
-                    f"{f' - {video_label}' if video_label else ''}에 해당하는 장면입니다. "
+                    f"{f' - {source_display}' if source_display else ''}에 해당하는 장면입니다. "
                     "영상의 주요 등장인물, 사건, 분위기를 한국어로 요약하고, "
                     "번역 시 주의해야 할 맥락이나 용어를 정리해 주세요."
                 )

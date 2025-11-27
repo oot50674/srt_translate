@@ -24,7 +24,6 @@ from module.storage import history_storage
 from module.gemini_module import GeminiClient, sanitize_history_messages
 from module.video_split import SegmentMetadata, split_video_by_minutes, DEFAULT_STORAGE_KEY
 from module.Whisper_util import transcribe_audio_with_timestamps, unload_whisper_util
-from module.hallucination_filter import fix_repetitive_hallucinations
 # Silero VAD 기반 싱크 보정은 Whisper 전사 워크플로우에서 제거되었습니다.
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -564,22 +563,8 @@ def _build_entries_from_whisper(job: SubtitleJob) -> List[Dict[str, Any]]:
                 }
             )
             next_index += 1
-    if entries and job.source_path:
-        try:
-            entries, hallucination_stats = fix_repetitive_hallucinations(
-                entries,
-                job.source_path,
-            )
-            retranscribed = hallucination_stats.get("retranscribed", 0)
-            flagged = hallucination_stats.get("flagged", 0)
-            succeeded = hallucination_stats.get("succeeded", 0)
-            if retranscribed or flagged:
-                job.append_log(
-                    f"환각 의심 자막 {retranscribed}건 재전사(성공 {succeeded}건, 표시 {flagged}건)."
-                )
-        except Exception as exc:
-            job.append_log(f"환각 의심 자막 재전사 실패: {exc}", level="warning")
     return entries
+
 def _initialize_job_entries(job: SubtitleJob, entries: List[Dict[str, Any]]) -> None:
     ordered = sorted(entries, key=lambda item: item["start"])
     for idx, entry in enumerate(ordered, start=1):

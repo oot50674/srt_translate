@@ -159,6 +159,34 @@ def _generate_output_path(output_dir: str, prefix: str, index: int, extension: s
     return os.path.join(output_dir, f"{prefix}_{index:03d}{extension}")
 
 
+def _detect_speech_segments(
+    input_path: str,
+    *,
+    vad_threshold: float,
+) -> tuple[List[Dict[str, float]], float, bool, str]:
+    """파일에서 발화 구간을 추출하고 기본 메타 정보를 반환합니다."""
+
+    if not os.path.isfile(input_path):
+        raise FileNotFoundError(f"입력 비디오를 찾을 수 없습니다: {input_path}")
+
+    video_duration = get_duration_seconds(input_path)
+    source_has_video = has_video_stream(input_path)
+    source_has_audio = has_audio_stream(input_path)
+    if not source_has_audio:
+        raise ValueError("오디오 트랙이 없는 미디어는 분할할 수 없습니다.")
+
+    audio_path = _extract_audio_for_vad(input_path)
+    try:
+        vad = SileroVAD(threshold=vad_threshold)
+        speech_segments = vad.detect_speech_from_file(audio_path)
+    finally:
+        _cleanup_temp_file(audio_path)
+
+    speech_segments = _clamp_segments(speech_segments, video_duration)
+    extension = os.path.splitext(input_path)[1] or ".mp4"
+    return speech_segments, video_duration, source_has_video, extension
+
+
 def _cut_media_chunk(
     input_path: str,
     output_path: str,
@@ -230,22 +258,11 @@ def split_video_by_minutes(
     """Silero VAD 결과를 기반으로 분 단위 내에서 비디오를 분할합니다."""
 
     _validate_inputs(input_path, output_dir, minutes_per_segment)
-    extension = os.path.splitext(input_path)[1] or ".mp4"
+    speech_segments, video_duration, source_has_video, extension = _detect_speech_segments(
+        input_path,
+        vad_threshold=vad_threshold,
+    )
     max_duration = max(1.0, minutes_per_segment * 60.0)
-    video_duration = get_duration_seconds(input_path)
-    source_has_video = has_video_stream(input_path)
-    source_has_audio = has_audio_stream(input_path)
-    if not source_has_audio:
-        raise ValueError("오디오 트랙이 없는 미디어는 분할할 수 없습니다.")
-
-    audio_path = _extract_audio_for_vad(input_path)
-    try:
-        vad = SileroVAD(threshold=vad_threshold)
-        speech_segments = vad.detect_speech_from_file(audio_path)
-    finally:
-        _cleanup_temp_file(audio_path)
-
-    speech_segments = _clamp_segments(speech_segments, video_duration)
 
     if not speech_segments:
         # 발화가 감지되지 않으면 전체 비디오를 하나의 구간으로 처리합니다.
@@ -278,6 +295,62 @@ def split_video_by_minutes(
                 end_time=round(end, 3),
                 duration=round(end - start, 3),
                 speech_segments=[dict(seg) for seg in group.get("segments", [])],
+            )
+        )
+
+    _store_metadata(metadata, storage_key)
+    return metadata
+
+
+def split_video_by_utterances(
+    input_path: str,
+    output_dir: str,
+    *,
+    storage_key: str = DEFAULT_STORAGE_KEY,
+    prefix: str = "utterance",
+    vad_threshold: float = 0.7,
+) -> List[SegmentMetadata]:
+    """발화 구간을 그대로 사용하여 비디오/오디오를 잘라냅니다."""
+
+    MIN_UTTERANCE_DURATION = 1.0  # 1초 이하 발화는 전사에서 제외
+    if not os.path.isfile(input_path):
+        raise FileNotFoundError(f"입력 비디오를 찾을 수 없습니다: {input_path}")
+    os.makedirs(output_dir, exist_ok=True)
+
+    speech_segments, video_duration, source_has_video, extension = _detect_speech_segments(
+        input_path,
+        vad_threshold=vad_threshold,
+    )
+
+    # 발화가 없으면 전체 파일을 하나의 세그먼트로 처리
+    if not speech_segments:
+        speech_segments = [{"start": 0.0, "end": round(video_duration, 3)}]
+
+    metadata: List[SegmentMetadata] = []
+    for idx, seg in enumerate(speech_segments, start=1):
+        start = float(seg.get("start", 0.0))
+        end = float(seg.get("end", 0.0))
+        if end <= start:
+            continue
+        if (end - start) <= MIN_UTTERANCE_DURATION:
+            # 너무 짧은 발화는 건너뛴다.
+            continue
+        output_path = _generate_output_path(output_dir, prefix, idx, extension)
+        _cut_media_chunk(
+            input_path,
+            output_path,
+            start,
+            end,
+            include_video=source_has_video,
+        )
+        metadata.append(
+            SegmentMetadata(
+                index=idx,
+                file_path=os.path.abspath(output_path),
+                start_time=round(start, 3),
+                end_time=round(end, 3),
+                duration=round(end - start, 3),
+                speech_segments=[{"start": round(start, 3), "end": round(end, 3)}],
             )
         )
 

@@ -18,9 +18,9 @@ from module.video_split import (
     DEFAULT_STORAGE_KEY,
     SegmentMetadata,
     split_video_by_minutes,
+    split_video_by_utterances,
 )
 from module.Whisper_util import WhisperUtil
-from module.hallucination_filter import fix_repetitive_hallucinations
 from module.ffmpeg_module import get_duration_seconds
 
 
@@ -228,6 +228,10 @@ def _youtube_display_name(url: str, fallback: str) -> str:
     return fallback
 
 
+# Minimum entry duration ensures we never produce zero-length cues after adjustments.
+MIN_ENTRY_DURATION = 0.001
+
+
 def _format_timestamp(seconds: float) -> str:
     ms = max(0, int(round(seconds * 1000)))
     hours, remainder = divmod(ms, 3600 * 1000)
@@ -279,7 +283,6 @@ class WhisperBatchItem:
     updated_at: float = field(default_factory=time.time)
     download_ready: bool = False
     speech_timeline: List[Dict[str, float]] = field(default_factory=list)
-    apply_hallucination_cleanup: bool = True
     segment_progress: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self, batch_id: str) -> Dict[str, Any]:
@@ -295,7 +298,6 @@ class WhisperBatchItem:
             "transcript_ready": bool(download_url and self.download_ready),
             "download_url": download_url,
             "updated_at": self.updated_at,
-            "apply_hallucination_cleanup": self.apply_hallucination_cleanup,
             "segment_progress": self.segment_progress,
         }
 
@@ -306,7 +308,7 @@ class WhisperBatch:
     chunk_seconds: float
     base_dir: str
     model_name: str = "large-v3"
-    apply_hallucination_cleanup: bool = True
+    segmentation_mode: str = "chunk"
     items: List[WhisperBatchItem] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
@@ -327,7 +329,7 @@ class WhisperBatch:
             "batch_id": self.batch_id,
             "chunk_seconds": self.chunk_seconds,
             "model_name": self.model_name,
-            "apply_hallucination_cleanup": self.apply_hallucination_cleanup,
+            "segmentation_mode": self.segmentation_mode,
             "status": self.status,
             "items": entries,
             "total_items": len(entries),
@@ -465,8 +467,8 @@ def _transcribe_segments(
     item: WhisperBatchItem,
     segments: List[SegmentMetadata],
     *,
-    apply_hallucination_cleanup: bool,
     model_name: str,
+    padding_seconds: float = 0.0,
 ) -> str:
     whisper = _get_whisper(model_name)
     entries: List[Dict[str, Any]] = []
@@ -516,16 +518,18 @@ def _transcribe_segments(
             progress=0.0,
             message="전사 중",
         )
+        segment_start_time = float(getattr(segment, "start_time", 0.0) or 0.0)
         segment_duration = float(getattr(segment, "duration", 0.0) or 0.0)
         if segment_duration <= 0.0:
-            segment_duration = float(segment.end_time - segment.start_time)
+            segment_duration = float(getattr(segment, "end_time", 0.0) or 0.0) - segment_start_time
         if segment_duration <= 0.0:
             segment_duration = 0.001
+        segment_end_limit = segment_start_time + segment_duration
         try:
             progress_callback = _build_segment_progress_callback(
                 idx - 1,
                 segment_duration,
-                float(getattr(segment, "start_time", 0.0) or 0.0),
+                segment_start_time,
             )
             result = whisper.transcribe_audio(
                 segment.file_path,
@@ -545,8 +549,18 @@ def _transcribe_segments(
             text = str(snippet.get("text", "")).strip()
             if not text:
                 continue
-            start = segment.start_time + float(snippet.get("start", 0.0))
-            end = segment.start_time + float(snippet.get("end", 0.0))
+            start = segment_start_time + float(snippet.get("start", 0.0))
+            end = segment_start_time + float(snippet.get("end", 0.0))
+            if padding_seconds:
+                padded_start = max(0.0, start - padding_seconds)
+                padded_end = end + padding_seconds
+                if segment_end_limit > padded_start:
+                    padded_end = min(padded_end, segment_end_limit)
+                else:
+                    padded_end = padded_start + max(0.001, padding_seconds)
+                if padded_end <= padded_start:
+                    padded_end = padded_start + 0.001
+                start, end = padded_start, padded_end
             entries.append(
                 {
                     "start": max(0.0, start),
@@ -565,30 +579,18 @@ def _transcribe_segments(
     if not entries:
         entries.append({"start": 0.0, "end": 0.5, "text": "[NO SPEECH DETECTED]"})
     entries.sort(key=lambda entry: entry["start"])
-    
+    prev_end = 0.0
+    for entry in entries:
+        start = max(entry["start"], prev_end)
+        end = entry["end"]
+        if end <= start:
+            end = start + MIN_ENTRY_DURATION
+        entry["start"] = start
+        entry["end"] = end
+        prev_end = end
+
     print(f"DEBUG: Transcription finished. Entries: {len(entries)}")
 
-    if apply_hallucination_cleanup:
-        print("DEBUG: Starting hallucination cleanup")
-        try:
-            entries, hallucination_stats = fix_repetitive_hallucinations(
-                entries,
-                item.source_path,
-                whisper=whisper,
-            )
-            flagged = hallucination_stats.get("flagged", 0)
-            retranscribed = hallucination_stats.get("retranscribed", 0)
-            if flagged or retranscribed:
-                _update_item(
-                    batch,
-                    item,
-                    message=f"환각 의심 자막 {retranscribed}건 재전사, {flagged}건 표시 처리 중...",
-                )
-            print("DEBUG: Hallucination cleanup finished")
-        except Exception as exc:
-            print(f"DEBUG: Hallucination cleanup failed: {exc}")
-            _update_item(batch, item, message=f"환각 반복 검사 건너뜀: {exc}")
-    
     print("DEBUG: Writing SRT")
     transcript_dir = _ensure_dir(item.output_dir)
     base_name = os.path.splitext(item.file_name)[0] or item.item_id
@@ -603,7 +605,15 @@ def _process_item(batch: WhisperBatch, item: WhisperBatchItem) -> None:
         storage_key = f"{DEFAULT_STORAGE_KEY}:whisper:{batch.batch_id}:{item.item_id}"
         _update_item(batch, item, status="running", message="세그먼트를 준비하는 중입니다...", progress=0.0)
         source_path = _ensure_source_path(batch, item)
-        if batch.chunk_seconds <= 0:
+        mode = (batch.segmentation_mode or "chunk").lower()
+        if mode == "utterance":
+            segments = split_video_by_utterances(
+                input_path=source_path,
+                output_dir=item.segments_dir,
+                storage_key=storage_key,
+                prefix="utterance",
+            )
+        elif mode == "full_file" or batch.chunk_seconds <= 0:
             # Bypass splitting; treat the full source file as a single segment
             try:
                 video_duration = get_duration_seconds(source_path)
@@ -639,13 +649,13 @@ def _process_item(batch: WhisperBatch, item: WhisperBatchItem) -> None:
                 aggregated_segments.append({"start": start, "end": end})
         aggregated_segments.sort(key=lambda seg: seg["start"])
         item.speech_timeline = aggregated_segments
-        apply_hallucination_cleanup = batch.apply_hallucination_cleanup and item.apply_hallucination_cleanup
+        padding_seconds = 0.2 if mode == "utterance" else 0.0
         transcript_path = _transcribe_segments(
             batch,
             item,
             segments,
-            apply_hallucination_cleanup=apply_hallucination_cleanup,
             model_name=batch.model_name,
+            padding_seconds=padding_seconds,
         )
         item.transcript_path = transcript_path
         item.download_ready = bool(transcript_path and os.path.isfile(transcript_path))
@@ -679,8 +689,8 @@ def create_batch(
     files: Iterable[Optional[FileStorage]],
     chunk_seconds: float = 30.0,
     youtube_urls: Iterable[str] = (),
-    apply_hallucination_cleanup: bool = True,
     model_name: Optional[str] = None,
+    segmentation_mode: str = "chunk",
 ) -> Dict[str, Any]:
     uploads = _filter_uploads(files)
     raw_youtube_urls = list(youtube_urls or [])
@@ -691,6 +701,11 @@ def create_batch(
         raise ValueError("업로드할 영상 또는 오디오 파일을 선택해 주세요.")
     if chunk_seconds < 0:
         raise ValueError("청크 길이는 음수일 수 없습니다.")
+    normalized_mode = (segmentation_mode or "chunk").strip().lower()
+    if normalized_mode not in {"chunk", "full_file", "utterance"}:
+        normalized_mode = "chunk"
+    if chunk_seconds <= 0 and normalized_mode == "chunk":
+        normalized_mode = "full_file"
     normalized_model = _normalize_model_name(model_name)
     with _LOCK:
         global _CURRENT_WHISPER_MODEL
@@ -721,7 +736,6 @@ def create_batch(
                 segments_dir=item_segments_dir,
                 output_dir=item_output_dir,
                 downloads_dir=uploads_dir,
-                apply_hallucination_cleanup=apply_hallucination_cleanup,
             )
         )
 
@@ -739,7 +753,6 @@ def create_batch(
                 output_dir=item_output_dir,
                 youtube_url=url,
                 downloads_dir=youtube_dir,
-                apply_hallucination_cleanup=apply_hallucination_cleanup,
             )
         )
 
@@ -748,7 +761,7 @@ def create_batch(
         chunk_seconds=chunk_seconds,
         base_dir=batch_dir,
         model_name=normalized_model,
-        apply_hallucination_cleanup=apply_hallucination_cleanup,
+        segmentation_mode=normalized_mode,
         items=items,
     )
     with _LOCK:
