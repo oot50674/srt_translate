@@ -13,3 +13,4 @@
 AGENTS.md
 *.pyc
 /models
+*srt_translate.bat
