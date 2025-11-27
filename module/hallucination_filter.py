@@ -16,9 +16,8 @@ logger = logging.getLogger(__name__)
 MIN_DURATION_SEC = 0.3
 MIN_TEXT_LENGTH = 0
 CHARS_PER_SECOND_THRESHOLD = 12
-LONG_HALLUCINATION_DURATION_SEC = 15.0
-MIN_ABSOLUTE_TEXT_CHARS = 150
-HALLUCINATION_NOTE = "{NOTE: Suspicious of halushination}"
+LONG_HALLUCINATION_DURATION_SEC = 20.0
+MIN_ABSOLUTE_TEXT_CHARS = 200
 
 def _is_suspicious_length(
     text: str,
@@ -35,12 +34,6 @@ def _is_suspicious_length(
         return False
     chars_per_sec = len(stripped) / max(duration, 0.001)
     return chars_per_sec >= min_chars_per_sec
-
-
-def _format_hallucination_text(original_text: str, fallback_text: str) -> str:
-    """원문과 안내 문구를 함께 기록합니다."""
-    base_text = (original_text or fallback_text or "").strip()
-    return f"{base_text}\n\n{HALLUCINATION_NOTE}"
 
 
 def _is_normal_entry(
@@ -182,22 +175,12 @@ def fix_repetitive_hallucinations(
         stats["retranscribed"] += 1
         if new_text:
             stripped_new = new_text.strip()
-            # If the newly transcribed text is very short, accept it.
-            # Otherwise, if it is no longer suspicious by our chars/sec rule,
-            # accept it as the new transcription. Else, mark as hallucination.
-            if len(stripped_new) <= 10 or _is_normal_entry(
-                stripped_new,
-                duration,
-                min_text_length=min_text_length,
-                min_chars_per_sec=min_chars_per_second,
-            ):
-                entry["text"] = stripped_new
-                stats["succeeded"] += 1
-                processed_entries.append(entry)
-                continue
-            entry["text"] = _format_hallucination_text(entry.get("original_text", ""), stripped_new)
-        else:
-            entry["text"] = _format_hallucination_text(entry.get("original_text", ""), text)
+            # 재전사 후 추가 검사 없이 바로 채택
+            entry["text"] = stripped_new
+            stats["succeeded"] += 1
+            processed_entries.append(entry)
+            continue
+        # 재전사 실패 시 원문 유지하고 플래그만 증가
         stats["flagged"] += 1
         processed_entries.append(entry)
 
