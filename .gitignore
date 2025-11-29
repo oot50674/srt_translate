@@ -13,4 +13,5 @@
 AGENTS.md
 *.pyc
 /models
-*srt_translate.bat
+start_service.bat
+stop_service.bat

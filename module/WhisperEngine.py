@@ -38,7 +38,7 @@ DEFAULT_TRANSCRIBE_PARAMS = {
     "vad_filter": True,
     "vad_parameters": dict(min_silence_duration_ms=700),
     "condition_on_previous_text": False,
-    "word_timestamps": True, # 필요시 True
+    "word_timestamps": False, # 필요시 True
     "chunk_length": 30,
     # note: faster-whisper transcribe expects 'chunk_length' (seconds)
 }

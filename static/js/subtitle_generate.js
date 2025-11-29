@@ -398,6 +398,7 @@
 
         // 커스텀 프롬프트 저장
         if (customPromptInput) setStorageValue('custom_prompt', customPromptInput.value);
+
     }
 
     function updateClearButtonVisibility() {

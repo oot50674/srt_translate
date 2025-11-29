@@ -912,6 +912,26 @@ def start_job(
 
     return job.to_dict()
 
+def _process_segment(
+    job: SubtitleJob,
+    client: GeminiClient,
+    segment: SegmentState,
+    *,
+    task_label: str,
+    last_segment_start_at: Optional[float],
+    allow_processed_increment: bool,
+    is_retry: bool = False,
+) -> float:
+    return _process_segment_with_entries(
+        job,
+        client,
+        segment,
+        task_label=task_label,
+        last_segment_start_at=last_segment_start_at,
+        allow_processed_increment=allow_processed_increment,
+        is_retry=is_retry,
+    )
+
 
 def _process_segment_entries(
     job: SubtitleJob,
@@ -996,7 +1016,7 @@ def _process_segment_entries(
     return update_count, updated_records
 
 
-def _process_segment(
+def _process_segment_with_entries(
     job: SubtitleJob,
     client: GeminiClient,
     segment: SegmentState,

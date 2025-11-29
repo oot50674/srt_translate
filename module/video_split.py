@@ -312,7 +312,7 @@ def split_video_by_utterances(
 ) -> List[SegmentMetadata]:
     """발화 구간을 그대로 사용하여 비디오/오디오를 잘라냅니다."""
 
-    MIN_UTTERANCE_DURATION = 1.0  # 1초 이하 발화는 전사에서 제외
+    MIN_UTTERANCE_DURATION = 0.5  # 이하 발화는 전사에서 제외
     if not os.path.isfile(input_path):
         raise FileNotFoundError(f"입력 비디오를 찾을 수 없습니다: {input_path}")
     os.makedirs(output_dir, exist_ok=True)

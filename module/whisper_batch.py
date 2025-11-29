@@ -231,6 +231,162 @@ def _youtube_display_name(url: str, fallback: str) -> str:
 # Minimum entry duration ensures we never produce zero-length cues after adjustments.
 MIN_ENTRY_DURATION = 0.001
 
+# 무음 구간 필터링 설정
+SILENCE_FILTER_MIN_COVERAGE_RATIO = 0.1  # 최소 VAD 커버리지 비율
+SILENCE_FILTER_MIN_COVERAGE_MS = 120  # 최소 VAD 커버리지 밀리초
+SILENCE_NOISE_RATIO_THRESHOLD = 0.15  # 엔트리 대비 무음 비율이 이 값 이하면 노이즈로 간주
+
+
+def _compute_overlap_seconds(
+    entry_start: float,
+    entry_end: float,
+    speech_segments: List[Dict[str, float]],
+) -> float:
+    """전사 엔트리와 음성 구간들의 겹치는 길이를 초 단위로 계산합니다."""
+    overlap = 0.0
+    for seg in speech_segments:
+        seg_start = float(seg.get("start", 0.0))
+        seg_end = float(seg.get("end", 0.0))
+        start = max(entry_start, seg_start)
+        end = min(entry_end, seg_end)
+        if end > start:
+            overlap += end - start
+    return overlap
+
+
+def _find_silence_gaps_in_entry(
+    entry_start: float,
+    entry_end: float,
+    speech_segments: List[Dict[str, float]],
+) -> List[Dict[str, float]]:
+    """엔트리 내에서 음성이 없는 무음 구간들을 찾습니다."""
+    if entry_end <= entry_start:
+        return []
+    
+    # 엔트리 범위와 겹치는 음성 구간만 추출하고 정렬
+    relevant_segments = []
+    for seg in speech_segments:
+        seg_start = float(seg.get("start", 0.0))
+        seg_end = float(seg.get("end", 0.0))
+        # 엔트리와 겹치는 부분만 추출
+        overlap_start = max(entry_start, seg_start)
+        overlap_end = min(entry_end, seg_end)
+        if overlap_end > overlap_start:
+            relevant_segments.append({"start": overlap_start, "end": overlap_end})
+    
+    if not relevant_segments:
+        # 음성 구간이 없으면 전체가 무음
+        return [{"start": entry_start, "end": entry_end}]
+    
+    relevant_segments.sort(key=lambda s: s["start"])
+    
+    # 무음 구간 찾기
+    silence_gaps = []
+    current_pos = entry_start
+    
+    for seg in relevant_segments:
+        if seg["start"] > current_pos:
+            silence_gaps.append({"start": current_pos, "end": seg["start"]})
+        current_pos = max(current_pos, seg["end"])
+    
+    # 마지막 음성 구간 이후의 무음
+    if current_pos < entry_end:
+        silence_gaps.append({"start": current_pos, "end": entry_end})
+    
+    return silence_gaps
+
+
+def _is_silence_noise(
+    entry_start: float,
+    entry_end: float,
+    speech_segments: List[Dict[str, float]],
+    noise_ratio_threshold: float = SILENCE_NOISE_RATIO_THRESHOLD,
+) -> bool:
+    """
+    엔트리 내 무음 구간이 노이즈인지 판단합니다.
+    - 무음 구간이 엔트리 중간에 위치하고
+    - 엔트리 길이 대비 매우 짧은 경우 노이즈로 간주
+    """
+    entry_duration = entry_end - entry_start
+    if entry_duration <= 0:
+        return False
+    
+    silence_gaps = _find_silence_gaps_in_entry(entry_start, entry_end, speech_segments)
+    if not silence_gaps:
+        return False
+    
+    # 모든 무음 구간의 총 길이 계산
+    total_silence = sum(gap["end"] - gap["start"] for gap in silence_gaps)
+    silence_ratio = total_silence / entry_duration
+    
+    # 무음이 엔트리 대비 매우 짧은 비율이면 노이즈로 간주
+    if silence_ratio <= noise_ratio_threshold:
+        return True
+    
+    # 무음 구간이 엔트리의 시작이나 끝이 아닌 중간에만 있고, 
+    # 개별 무음 구간이 모두 짧은 경우도 노이즈로 간주
+    has_start_silence = any(abs(gap["start"] - entry_start) < 0.05 for gap in silence_gaps)
+    has_end_silence = any(abs(gap["end"] - entry_end) < 0.05 for gap in silence_gaps)
+    
+    if not has_start_silence and not has_end_silence:
+        # 중간에만 무음이 있는 경우
+        max_gap = max(gap["end"] - gap["start"] for gap in silence_gaps)
+        if max_gap / entry_duration <= noise_ratio_threshold:
+            return True
+    
+    return False
+
+
+def _filter_silent_entries(
+    entries: List[Dict[str, Any]],
+    speech_segments: List[Dict[str, float]],
+    min_coverage_ratio: float = SILENCE_FILTER_MIN_COVERAGE_RATIO,
+    min_coverage_ms: float = SILENCE_FILTER_MIN_COVERAGE_MS,
+) -> tuple[List[Dict[str, Any]], int]:
+    """
+    video_split에서 생성된 speech_segments를 활용하여 무음 구간의 엔트리를 필터링합니다.
+    
+    Args:
+        entries: 전사 결과 엔트리 리스트 (start, end, text)
+        speech_segments: VAD로 감지된 음성 구간 리스트 (start, end)
+        min_coverage_ratio: 최소 VAD 커버리지 비율
+        min_coverage_ms: 최소 VAD 커버리지 (밀리초)
+
+    Returns:
+        (필터링된 엔트리 리스트, 제거된 엔트리 수)
+    """
+    if not speech_segments or not entries:
+        return entries, 0
+
+    filtered: List[Dict[str, Any]] = []
+    removed_count = 0
+
+    for entry in entries:
+        entry_start = float(entry.get("start", 0.0))
+        entry_end = float(entry.get("end", 0.0))
+        entry_duration_ms = (entry_end - entry_start) * 1000
+
+        # 무음 구간이 엔트리 중간에 있고 매우 짧은 경우 노이즈로 간주하여 유지
+        if _is_silence_noise(entry_start, entry_end, speech_segments):
+            filtered.append(entry)
+            continue
+
+        # VAD 세그먼트와의 겹침 계산
+        overlap_seconds = _compute_overlap_seconds(entry_start, entry_end, speech_segments)
+        overlap_ms = overlap_seconds * 1000
+        coverage_threshold_ms = max(min_coverage_ms, entry_duration_ms * min_coverage_ratio)
+
+        if overlap_ms < coverage_threshold_ms:
+            # 무음 구간으로 판단하여 제거
+            removed_count += 1
+            print(f"DEBUG: Silent entry filtered - start={entry_start:.3f}, end={entry_end:.3f}, "
+                  f"overlap={overlap_ms:.0f}ms, threshold={coverage_threshold_ms:.0f}ms")
+            continue
+
+        filtered.append(entry)
+
+    return filtered, removed_count
+
 
 def _format_timestamp(seconds: float) -> str:
     ms = max(0, int(round(seconds * 1000)))
@@ -469,6 +625,8 @@ def _transcribe_segments(
     *,
     model_name: str,
     padding_seconds: float = 0.0,
+    speech_timeline: Optional[List[Dict[str, float]]] = None,
+    apply_silence_filter: bool = True,
 ) -> str:
     whisper = _get_whisper(model_name)
     entries: List[Dict[str, Any]] = []
@@ -591,6 +749,14 @@ def _transcribe_segments(
 
     print(f"DEBUG: Transcription finished. Entries: {len(entries)}")
 
+    # 무음 구간 필터링 후처리
+    if apply_silence_filter and speech_timeline:
+        _update_item(batch, item, message="무음 구간 필터링 중...")
+        entries, removed_count = _filter_silent_entries(entries, speech_timeline)
+        if removed_count > 0:
+            print(f"DEBUG: Filtered {removed_count} silent entries. Remaining: {len(entries)}")
+            _update_item(batch, item, message=f"무음 엔트리 {removed_count}개 제거됨")
+
     print("DEBUG: Writing SRT")
     transcript_dir = _ensure_dir(item.output_dir)
     base_name = os.path.splitext(item.file_name)[0] or item.item_id
@@ -650,12 +816,16 @@ def _process_item(batch: WhisperBatch, item: WhisperBatchItem) -> None:
         aggregated_segments.sort(key=lambda seg: seg["start"])
         item.speech_timeline = aggregated_segments
         padding_seconds = 0.2 if mode == "utterance" else 0.0
+        # speech_timeline이 있으면 무음 필터링 활성화 (full_file 모드에서는 비활성화)
+        apply_silence_filter = mode != "full_file" and bool(aggregated_segments)
         transcript_path = _transcribe_segments(
             batch,
             item,
             segments,
             model_name=batch.model_name,
             padding_seconds=padding_seconds,
+            speech_timeline=aggregated_segments if apply_silence_filter else None,
+            apply_silence_filter=apply_silence_filter,
         )
         item.transcript_path = transcript_path
         item.download_ready = bool(transcript_path and os.path.isfile(transcript_path))

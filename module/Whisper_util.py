@@ -94,10 +94,10 @@ class WhisperUtil:
         self.model_name = model_name or "large-v3"
         self.download_root = download_root
         self.model_kwargs = model_kwargs
-        self.no_speech_threshold = 0.8
-        self.temperature = 0.4
+        self.no_speech_threshold = 0.7
+        self.temperature = 0.2
         self.compression_ratio_threshold = 2.2
-        self.repetition_penalty = 1.05
+        self.repetition_penalty = 1.1
         self.no_repeat_ngram_size = 3
         self.engine: Optional[WhisperEngine] = None  # 타입 힌트 유지
         self.process_runner: Optional[WhisperProcessRunner] = None
