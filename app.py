@@ -2,6 +2,7 @@ import logging
 import os
 import tempfile
 import json
+import time
 import uuid
 from queue import Empty
 from typing import Optional, Dict, List, Any, Tuple
@@ -962,6 +963,116 @@ def api_extract_audio_from_video():
     except Exception as e:
         logger.exception("오디오 추출 중 오류 발생")
         return jsonify({'error': f'오디오 추출 중 오류가 발생했습니다: {str(e)}'}), 500
+
+#----- Gemini File Management API -----
+@app.route('/api/gemini/files', methods=['GET'])
+def api_list_gemini_files():
+    """Gemini에 업로드된 파일 목록 조회."""
+    try:
+        from google import genai
+        api_key = get_config_value('api_key') or os.getenv('GOOGLE_API_KEY')
+        if not api_key:
+            return jsonify({'error': 'API 키가 설정되지 않았습니다.'}), 400
+        client = genai.Client(api_key=api_key)
+        files = list(client.files.list())
+        file_list = []
+        for f in files:
+            file_list.append({
+                'name': f.name,
+                'display_name': getattr(f, 'display_name', None),
+                'mime_type': getattr(f, 'mime_type', None),
+                'size_bytes': getattr(f, 'size_bytes', None),
+                'state': str(getattr(f, 'state', None)),
+                'create_time': str(getattr(f, 'create_time', None)) if hasattr(f, 'create_time') else None,
+                'expiration_time': str(getattr(f, 'expiration_time', None)) if hasattr(f, 'expiration_time') else None,
+            })
+        return jsonify({'files': file_list, 'count': len(file_list)})
+    except Exception as e:
+        logger.exception("Gemini 파일 목록 조회 중 오류 발생")
+        return jsonify({'error': f'파일 목록 조회 중 오류가 발생했습니다: {str(e)}'}), 500
+
+
+@app.route('/api/gemini/files', methods=['DELETE'])
+@app.route('/api/gemini/files/delete-all', methods=['GET', 'POST', 'DELETE'])
+def api_delete_all_gemini_files():
+    """Gemini에 업로드된 모든 파일 삭제 (병렬 처리)."""
+    try:
+        from google import genai
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        api_key = get_config_value('api_key') or os.getenv('GOOGLE_API_KEY')
+        if not api_key:
+            return jsonify({'error': 'API 키가 설정되지 않았습니다.'}), 400
+        client = genai.Client(api_key=api_key)
+        files = list(client.files.list())
+        if not files:
+            return jsonify({'status': 'no_files', 'message': '삭제할 파일이 없습니다.', 'deleted_count': 0})
+        
+        deleted = []
+        failed = []
+        
+        def delete_file(f):
+            try:
+                client.files.delete(name=f.name)
+                return {'success': True, 'name': f.name, 'display_name': getattr(f, 'display_name', None)}
+            except Exception as e:
+                return {'success': False, 'name': f.name, 'display_name': getattr(f, 'display_name', None), 'error': str(e)}
+        
+        # 최대 50개 스레드로 병렬 삭제 (API에 일괄 삭제 기능 없음)
+        with ThreadPoolExecutor(max_workers=50) as executor:
+            futures = {executor.submit(delete_file, f): f for f in files}
+            for future in as_completed(futures):
+                result = future.result()
+                if result['success']:
+                    deleted.append({'name': result['name'], 'display_name': result['display_name']})
+                else:
+                    failed.append({'name': result['name'], 'display_name': result['display_name'], 'error': result['error']})
+        
+        return jsonify({
+            'status': 'completed',
+            'deleted_count': len(deleted),
+            'failed_count': len(failed),
+            'deleted': deleted,
+            'failed': failed
+        })
+    except Exception as e:
+        logger.exception("Gemini 파일 전체 삭제 중 오류 발생")
+        return jsonify({'error': f'파일 삭제 중 오류가 발생했습니다: {str(e)}'}), 500
+
+
+# ----- Server Management -----
+@app.route('/api/server/restart', methods=['POST'])
+def api_restart_server():
+    """서버 재시작. 응답 후 프로세스를 재시작합니다."""
+    import sys
+    import subprocess
+    
+    def restart():
+        """현재 프로세스를 종료하고 새로 시작합니다."""
+        time.sleep(1)  # 응답이 클라이언트에 전달될 시간 확보
+        python = sys.executable
+        os.execl(python, python, *sys.argv)
+    
+    # 백그라운드 스레드에서 재시작 수행
+    import threading
+    threading.Thread(target=restart, daemon=True).start()
+    
+    return jsonify({'status': 'restarting', 'message': '서버가 재시작됩니다.'})
+
+
+@app.route('/api/server/shutdown', methods=['POST'])
+def api_shutdown_server():
+    """서버 종료."""
+    import signal
+    
+    def shutdown():
+        time.sleep(1)  # 응답이 클라이언트에 전달될 시간 확보
+        os.kill(os.getpid(), signal.SIGTERM)
+    
+    import threading
+    threading.Thread(target=shutdown, daemon=True).start()
+    
+    return jsonify({'status': 'shutting_down', 'message': '서버가 종료됩니다.'})
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', debug=True, port=6789)

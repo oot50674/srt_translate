@@ -814,10 +814,11 @@ class GeminiClient:
         self._check_rpm_limit()
 
         user_message_parts: List[Dict[str, Any]] = []
+        uploaded_file_names: List[str] = []
 
         # 이미지/비디오/오디오 파일 업로드 및 추가
         if media_paths is not None:
-            media_parts = self.prepare_media_parts(media_paths, max_wait_seconds=max_wait_seconds)
+            media_parts, uploaded_file_names = self.prepare_media_parts(media_paths, max_wait_seconds=max_wait_seconds)
             user_message_parts.extend(media_parts)
 
         # 수동으로 구성한 파트 추가
@@ -899,6 +900,11 @@ class GeminiClient:
                 history_tokens,
                 token_limit,
             )
+
+            # 응답 성공 시 업로드된 파일 삭제
+            if uploaded_file_names:
+                self._delete_uploaded_files(uploaded_file_names)
+
             return response_text_out
 
         except errors.APIError as e:
@@ -944,10 +950,11 @@ class GeminiClient:
         self._check_rpm_limit()
 
         user_message_parts: List[Dict[str, Any]] = []
+        uploaded_file_names: List[str] = []
 
         # 이미지/비디오/오디오 파일 업로드 및 추가
         if media_paths is not None:
-            media_parts = self.prepare_media_parts(media_paths, max_wait_seconds=max_wait_seconds)
+            media_parts, uploaded_file_names = self.prepare_media_parts(media_paths, max_wait_seconds=max_wait_seconds)
             user_message_parts.extend(media_parts)
 
         # 수동으로 구성한 파트 추가
@@ -1055,6 +1062,10 @@ class GeminiClient:
                 history_tokens,
                 token_limit,
             )
+
+            # 응답 성공 시 업로드된 파일 삭제
+            if uploaded_file_names:
+                self._delete_uploaded_files(uploaded_file_names)
 
         except errors.APIError as e:
             # 오류 발생 시 추가한 사용자 메시지 롤백
@@ -1320,13 +1331,42 @@ class GeminiClient:
             self.generation_config.pop('response_mime_type', None)
             self.default_response_mime_type = None
 
+    def _delete_uploaded_files(self, file_names: List[str]) -> None:
+        """
+        업로드된 파일들을 Gemini 서버에서 병렬로 삭제합니다.
+
+        Args:
+            file_names (List[str]): 삭제할 파일 이름 목록 (예: 'files/abc123').
+        """
+        if not file_names:
+            return
+        
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        
+        def delete_single(name: str) -> tuple[str, bool, Optional[str]]:
+            try:
+                self.client.files.delete(name=name)
+                return (name, True, None)
+            except Exception as e:
+                return (name, False, str(e))
+        
+        # 최대 50개 스레드로 병렬 삭제 (API에 일괄 삭제 기능 없음)
+        with ThreadPoolExecutor(max_workers=min(50, len(file_names))) as executor:
+            futures = [executor.submit(delete_single, name) for name in file_names]
+            for future in as_completed(futures):
+                name, success, error = future.result()
+                if success:
+                    logger.info("업로드된 파일 삭제 완료: %s", name)
+                else:
+                    logger.warning("업로드된 파일 삭제 실패: %s (%s)", name, error)
+
     def prepare_media_parts(
         self,
         media_paths: Union[str, os.PathLike[str], Sequence[Union[str, os.PathLike[str]]]],
         max_wait_seconds: int = 300,
-    ) -> List[Dict[str, Any]]:
+    ) -> tuple[List[Dict[str, Any]], List[str]]:
         """
-        이미지/비디오/오디오 파일을 업로드하고 file_data 파트 목록을 반환합니다.
+        이미지/비디오/오디오 파일을 업로드하고 file_data 파트 목록과 파일 이름 목록을 반환합니다.
         비디오/오디오 파일은 ACTIVE 상태가 될 때까지 자동으로 대기합니다.
 
         Args:
@@ -1335,7 +1375,7 @@ class GeminiClient:
             max_wait_seconds (int): 비디오/오디오 파일이 ACTIVE 상태가 될 때까지 최대 대기 시간 (초).
 
         Returns:
-            list: file_data 파트 리스트
+            tuple: (file_data 파트 리스트, 업로드된 파일 이름 리스트)
 
         Raises:
             FileNotFoundError: 미디어 파일이 존재하지 않을 때.
@@ -1353,6 +1393,7 @@ class GeminiClient:
             raise ValueError("media_paths는 비어 있을 수 없습니다.")
 
         parts: List[Dict[str, Any]] = []
+        uploaded_file_names: List[str] = []
         for path in normalized_paths:
             if not os.path.exists(path):
                 logger.error("미디어 파일을 찾을 수 없습니다: %s", path)
@@ -1404,8 +1445,10 @@ class GeminiClient:
                     time.sleep(2)
 
             parts.append({"file_data": {"file_uri": file_uri, "mime_type": mime_type}})
+            if file_name:
+                uploaded_file_names.append(file_name)
 
-        return parts
+        return parts, uploaded_file_names
 
 
 def _strip_translation_prompt(text: str) -> Optional[str]:
