@@ -87,11 +87,11 @@ class WhisperUtil:
     ):
         """
         WhisperUtil 초기화.
-        CUDA 사용 가능 시 GPU large-v3, 아니면 CPU int8 모델을 로드합니다.
+        CUDA 사용 가능 시 GPU large-v2, 아니면 CPU int8 모델을 로드합니다.
         또한 전사(transcription)에 사용할 기본 파라미터를 설정합니다.
         """
         self.device, self.compute_type = self._decide_runtime_mode(device, compute_type)
-        self.model_name = model_name or "large-v3"
+        self.model_name = model_name or "large-v2"
         self.download_root = download_root
         self.model_kwargs = model_kwargs
         self.no_speech_threshold = 0.7
