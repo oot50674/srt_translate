@@ -1075,18 +1075,4 @@ def api_shutdown_server():
 
 
 if __name__ == '__main__':
-    debug_flag = str(os.getenv('FLASK_DEBUG', '1')).lower() in {'1', 'true', 'yes', 'on'}
-    reload_flag = str(os.getenv('FLASK_RELOAD', '0')).lower() in {'1', 'true', 'yes', 'on'}
-    try:
-        port = int(os.getenv('PORT', '6789'))
-    except (TypeError, ValueError):
-        port = 6789
-
-    # 윈도우에서 디버그 리로더가 파일 잠금을 유발해 외부 수정이 막히는 문제를 방지합니다.
-    # 자동 새로고침이 필요하면 FLASK_RELOAD=1로 명시적으로 켜세요.
-    app.run(
-        host='0.0.0.0',
-        debug=debug_flag,
-        port=port,
-        use_reloader=debug_flag and reload_flag,
-    )
+    app.run(host='0.0.0.0', debug=True, port=6789)
