@@ -163,6 +163,9 @@ def _detect_speech_segments(
     input_path: str,
     *,
     vad_threshold: float,
+    min_speech_duration_ms: int = 100,
+    min_silence_duration_ms: int = 250,
+    speech_pad_ms: int = 30,
 ) -> tuple[List[Dict[str, float]], float, bool, str]:
     """파일에서 발화 구간을 추출하고 기본 메타 정보를 반환합니다."""
 
@@ -177,7 +180,12 @@ def _detect_speech_segments(
 
     audio_path = _extract_audio_for_vad(input_path)
     try:
-        vad = SileroVAD(threshold=vad_threshold)
+        vad = SileroVAD(
+            threshold=vad_threshold,
+            min_speech_duration_ms=min_speech_duration_ms,
+            min_silence_duration_ms=min_silence_duration_ms,
+            speech_pad_ms=speech_pad_ms,
+        )
         speech_segments = vad.detect_speech_from_file(audio_path)
     finally:
         _cleanup_temp_file(audio_path)
@@ -308,7 +316,7 @@ def split_video_by_utterances(
     *,
     storage_key: str = DEFAULT_STORAGE_KEY,
     prefix: str = "utterance",
-    vad_threshold: float = 0.7,
+    vad_threshold: float = 0.6,
 ) -> List[SegmentMetadata]:
     """발화 구간을 그대로 사용하여 비디오/오디오를 잘라냅니다."""
 
@@ -320,6 +328,9 @@ def split_video_by_utterances(
     speech_segments, video_duration, source_has_video, extension = _detect_speech_segments(
         input_path,
         vad_threshold=vad_threshold,
+        min_speech_duration_ms=200,
+        min_silence_duration_ms=600,
+        speech_pad_ms=120,
     )
 
     # 발화가 없으면 전체 파일을 하나의 세그먼트로 처리

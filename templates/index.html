@@ -201,6 +201,23 @@
                     <input type="number" id="rpm-limit" class="w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 focus:border-[#0c77f2] focus:outline-none focus:ring-2 focus:ring-[#0c77f2]/20" min="1" step="1" value="9" />
                     <p class="text-xs text-slate-500 mt-1">모델 호출 최대 횟수/분. 너무 낮게 설정하면 번역이 지연될 수 있습니다.</p>
                 </div>
+                <section id="server-control-section" class="settings-section mt-6">
+                    <div class="flex items-center justify-between">
+                        <h4 class="text-slate-800 text-lg font-semibold leading-tight">서버 제어</h4>
+                        <span class="text-xs text-slate-500">주의: 진행 중 작업 끊길 수 있음</span>
+                    </div>
+                    <p class="text-xs text-slate-500 mt-1">재시작/종료는 백엔드 프로세스를 즉시 끊습니다. 번역이 끝난 뒤 사용하세요.</p>
+                    <div class="mt-3 grid grid-cols-2 gap-3">
+                        <button type="button" id="server-restart-btn" class="server-control-btn inline-flex items-center justify-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                            <span class="material-icons text-base">refresh</span>
+                            <span class="truncate">서버 재시작</span>
+                        </button>
+                        <button type="button" id="server-shutdown-btn" class="server-control-btn inline-flex items-center justify-center gap-2 rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                            <span class="material-icons text-base">power_settings_new</span>
+                            <span class="truncate">서버 종료</span>
+                        </button>
+                    </div>
+                </section>
             </div>
         </div>
     </aside>

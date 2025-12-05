@@ -35,6 +35,8 @@ $(function () {
     const $videoFileInput = $('#video-file-input');
     const $videoFileStatus = $('#video-file-status');
     const $videoDropZone = $('#video-context-drop');
+    const $serverRestartBtn = $('#server-restart-btn');
+    const $serverShutdownBtn = $('#server-shutdown-btn');
     const ALLOWED_VIDEO_EXTS = ['.mp4', '.mov', '.mkv', '.avi', '.webm', '.m4v'];
     const SETTINGS_PANEL_STORAGE_KEY = 'settingsPanelOpen';
     const LAST_PRESET_COOKIE_KEY = 'lastUsedPreset';
@@ -372,6 +374,52 @@ $(function () {
                 saveConfig(payload);
             }
         }, SAVE_DEBOUNCE_MS);
+    }
+
+    // 서버 제어 요청 헬퍼
+    function setServerActionLoading(loading) {
+        [$serverRestartBtn, $serverShutdownBtn].forEach(($btn) => {
+            if ($btn && $btn.length) {
+                $btn.prop('disabled', !!loading);
+            }
+        });
+    }
+
+    async function requestServerControl(action) {
+        const isRestart = action === 'restart';
+        const $btn = isRestart ? $serverRestartBtn : $serverShutdownBtn;
+        if (!$btn.length) return;
+        const confirmText = isRestart
+            ? '서버를 재시작하시겠습니까? 진행 중인 요청이 끊길 수 있습니다.'
+            : '서버를 종료하시겠습니까? 서버가 종료되면 수동으로 다시 실행해야 합니다.';
+        if (!confirm(confirmText)) return;
+
+        setServerActionLoading(true);
+        try {
+            const res = await fetch(isRestart ? '/api/server/restart' : '/api/server/shutdown', { method: 'POST' });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.message || '요청 실패');
+            const okMsg = isRestart
+                ? '서버 재시작을 요청했습니다. 잠시 후 연결이 끊길 수 있습니다.'
+                : '서버 종료를 요청했습니다. 종료 후에는 수동으로 다시 실행하세요.';
+            if (window.Toast && typeof window.Toast.info === 'function') {
+                Toast.info(okMsg);
+            } else {
+                alert(okMsg);
+            }
+        } catch (err) {
+            console.error(err);
+            const errMsg = isRestart ? '재시작 요청에 실패했습니다.' : '종료 요청에 실패했습니다.';
+            if (window.Toast && typeof window.Toast.alert === 'function') {
+                Toast.alert(errMsg);
+            } else if (window.Toast && typeof window.Toast.error === 'function') {
+                Toast.error(errMsg);
+            } else {
+                alert(errMsg);
+            }
+        } finally {
+            setServerActionLoading(false);
+        }
     }
 
     // [이벤트 바인딩] API 키 저장 버튼 클릭
@@ -905,6 +953,14 @@ $(function () {
             const v = $(this).val();
             if (v && Number(v) > 0) scheduleAutoSave();
         });
+    }
+
+    // [이벤트 바인딩] 서버 재시작/종료 버튼
+    if ($serverRestartBtn.length) {
+        $serverRestartBtn.on('click', () => requestServerControl('restart'));
+    }
+    if ($serverShutdownBtn.length) {
+        $serverShutdownBtn.on('click', () => requestServerControl('shutdown'));
     }
 
     // 초기 config 로드
